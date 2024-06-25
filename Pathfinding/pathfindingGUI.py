@@ -3,7 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import heapq
-from matplotlib.widgets import Button
+from matplotlib.widgets import Button, Slider
+from collections import defaultdict
 
 
 class Node:
@@ -24,7 +25,8 @@ class InteractiveBIMPathfinder:
         self.start = None
         self.goal = None
         self.current_floor = 0
-        self.fig, self.ax = plt.subplots(figsize=(10, 8))
+        self.speed = 10  # Default speed
+        self.fig, self.ax = plt.subplots(figsize=(12, 9))
         self.setup_plot()
 
     def load_grid_data(self, filename):
@@ -34,29 +36,35 @@ class InteractiveBIMPathfinder:
         return grids, data['bbox'], data['floors'], data['grid_size']
 
     def setup_plot(self):
-        plt.subplots_adjust(bottom=0.2)
-        self.ax_prev = plt.axes([0.2, 0.05, 0.1, 0.075])
-        self.ax_next = plt.axes([0.31, 0.05, 0.1, 0.075])
-        self.ax_start = plt.axes([0.42, 0.05, 0.1, 0.075])
-        self.ax_goal = plt.axes([0.53, 0.05, 0.1, 0.075])
-        self.ax_run = plt.axes([0.64, 0.05, 0.1, 0.075])
+        plt.subplots_adjust(bottom=0.3)
+        self.ax_prev = plt.axes([0.2, 0.15, 0.1, 0.075])
+        self.ax_next = plt.axes([0.31, 0.15, 0.1, 0.075])
+        self.ax_start = plt.axes([0.42, 0.15, 0.1, 0.075])
+        self.ax_goal = plt.axes([0.53, 0.15, 0.1, 0.075])
+        self.ax_run = plt.axes([0.64, 0.15, 0.1, 0.075])
+        self.ax_speed = plt.axes([0.2, 0.05, 0.6, 0.03])
 
         self.b_prev = Button(self.ax_prev, 'Previous')
         self.b_next = Button(self.ax_next, 'Next')
         self.b_start = Button(self.ax_start, 'Set Start')
         self.b_goal = Button(self.ax_goal, 'Set Goal')
         self.b_run = Button(self.ax_run, 'Run A*')
+        self.s_speed = Slider(self.ax_speed, 'Speed', 1, 100, valinit=self.speed, valstep=1)
 
         self.b_prev.on_clicked(self.prev_floor)
         self.b_next.on_clicked(self.next_floor)
         self.b_start.on_clicked(self.set_start_mode)
         self.b_goal.on_clicked(self.set_goal_mode)
         self.b_run.on_clicked(self.run_astar)
+        self.s_speed.on_changed(self.update_speed)
 
         self.mode = None
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
 
         self.update_plot()
+
+    def update_speed(self, val):
+        self.speed = int(val)
 
     def grid_to_numeric(self, grid):
         element_types = ['empty', 'wall', 'door', 'stair', 'floor']
@@ -142,6 +150,9 @@ class InteractiveBIMPathfinder:
 
         heapq.heappush(open_list, (start_node.f, start_node))
 
+        progress_counter = 0
+        progress_threshold = max(1, int(100 / self.speed))
+
         while open_list:
             current_node = heapq.heappop(open_list)[1]
 
@@ -179,7 +190,10 @@ class InteractiveBIMPathfinder:
                             heapq.heapify(open_list)
                             break
 
-            self.visualize_progress(closed_set, [node for _, node in open_list])
+            progress_counter += 1
+            if progress_counter >= progress_threshold:
+                self.visualize_progress(closed_set, [node for _, node in open_list])
+                progress_counter = 0
 
         print("No path found.")
 
@@ -212,7 +226,7 @@ class InteractiveBIMPathfinder:
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
         plt.draw()
-        plt.pause(0.1)
+        plt.pause(0.01)
 
     def visualize_path(self, path):
         self.ax.clear()
