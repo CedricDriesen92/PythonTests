@@ -75,7 +75,7 @@ class InteractiveBIMPathfinder:
 
     def update_plot(self):
         self.ax.clear()
-        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        colors = ['white', 'gray', 'orange', 'red', 'beige']
         color_map = ListedColormap(colors)
 
         grid = self.grid_to_numeric(self.grids[self.current_floor])
