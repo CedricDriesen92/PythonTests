@@ -4,6 +4,11 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import heapq
 from matplotlib.widgets import Button, Slider
+import tkinter as tk
+from tkinter.filedialog import askopenfilename
+tk.Tk().withdraw() # part of the import if you are not using other tkinter functions
+
+
 
 
 class Node:
@@ -182,7 +187,7 @@ class InteractiveBIMPathfinder:
                 if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
                     neighbor.g += 5 * self.grid_size  # Higher cost for doors
                 elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
-                    neighbor.g += 2 * self.grid_size  # Moderate cost for stairs
+                    neighbor.g += 1.5 * self.grid_size  # Moderate cost for stairs
 
                 neighbor.h = self.heuristic(neighbor.position, goal_node.position)
                 neighbor.f = neighbor.g + neighbor.h
@@ -207,7 +212,7 @@ class InteractiveBIMPathfinder:
 
     def visualize_progress(self, closed_set, open_list):
         self.ax.clear()
-        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        colors = ['white', 'black', 'orange', 'red', 'lavenderblush'] #Nothing, wall, door, stair, floor
         color_map = ListedColormap(colors)
 
         grid = self.grid_to_numeric(self.grids[self.current_floor])
@@ -241,7 +246,8 @@ class InteractiveBIMPathfinder:
 
 
 def main():
-    pathfinder = InteractiveBIMPathfinder('bim_grids.json')
+    fn = askopenfilename(filetypes=[("json files", "*.json")])
+    pathfinder = InteractiveBIMPathfinder(fn)
     plt.show()
 
 

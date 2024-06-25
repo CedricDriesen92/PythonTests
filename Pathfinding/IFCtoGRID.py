@@ -3,8 +3,11 @@ import ifcopenshell.geom
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+import tkinter as tk
+from tkinter.filedialog import askopenfilename
+tk.Tk().withdraw() # part of the import if you are not using other tkinter functions
 
-wall_types = ['IfcWall', 'IfcWallStandardCase', 'IfcColumn']
+wall_types = ['IfcWall', 'IfcWallStandardCase', 'IfcColumn', 'IfcCurtainWall', 'IfcWindow']
 floor_types = ['IfcSlab', 'IfcFloor']
 door_types = ['IfcDoor']
 stair_types = ['IfcStair', 'IfcStairFlight']
@@ -31,37 +34,42 @@ def calculate_bounding_box_and_floors(ifc_file):
         if elevation is not None:
             floor_elevations.add(float(elevation))
 
-    ifc_items = [item for item in ifc_file.by_type("IfcProduct") if item.is_a() in all_types]
-    total_items = len(ifc_items)
-
-    for cur, item in enumerate(ifc_items, 1):
-        print(f"Item {cur} out of {total_items} processed.")
-        if item.Representation:
-            try:
-                shape = ifcopenshell.geom.create_shape(settings, item)
-                verts = shape.geometry.verts
-                for i in range(0, len(verts), 3):
-                    x, y, z = verts[i:i + 3]
-                    bbox['min_x'] = min(bbox['min_x'], x)
-                    bbox['min_y'] = min(bbox['min_y'], y)
-                    bbox['min_z'] = min(bbox['min_z'], z)
-                    bbox['max_x'] = max(bbox['max_x'], x)
-                    bbox['max_y'] = max(bbox['max_y'], y)
-                    bbox['max_z'] = max(bbox['max_z'], z)
-            except RuntimeError:
-                pass
+    ifc_items = ifc_file.by_type("IfcProduct")
+    cur = 0
+    for item in ifc_file.by_type("IfcProduct"):
+        if item.is_a() in all_types:
+            cur += 1
+            print(f"Item {cur} out of {len(ifc_items)} processed.")
+            if item.Representation:
+                try:
+                    shape = ifcopenshell.geom.create_shape(settings, item)
+                    verts = shape.geometry.verts
+                    for i in range(0, len(verts), 3):
+                        x, y, z = verts[i:i + 3]
+                        bbox['min_x'] = min(bbox['min_x'], x)
+                        bbox['min_y'] = min(bbox['min_y'], y)
+                        bbox['min_z'] = min(bbox['min_z'], z)
+                        bbox['max_x'] = max(bbox['max_x'], x)
+                        bbox['max_y'] = max(bbox['max_y'], y)
+                        bbox['max_z'] = max(bbox['max_z'], z)
+                except RuntimeError:
+                    pass
 
     floor_elevations = sorted(list(floor_elevations))
     floors = [{'elevation': e, 'height': next_e - e}
               for e, next_e in zip(floor_elevations, floor_elevations[1:] + [bbox['max_z']])
-              if next_e - e >= 1.5 and next_e - e < 1000]  # Only include floors taller than 1.5m
+              if next_e - e >= 1.5]  # Only include floors taller than 1.5m
+
+    if not floors:
+        print("Warning: No valid floors found. Creating a single floor based on bounding box.")
+        floors = [{'elevation': bbox['min_z'], 'height': bbox['max_z'] - bbox['min_z']}]
 
     return bbox, floors
 
 
 def create_faux_3d_grid(bbox, floors, grid_size=0.2):
-    x_cells = int((bbox['max_x'] - bbox['min_x']) / grid_size) + 1
-    y_cells = int((bbox['max_y'] - bbox['min_y']) / grid_size) + 1
+    x_cells = max(1, int((bbox['max_x'] - bbox['min_x']) / grid_size) + 1)
+    y_cells = max(1, int((bbox['max_y'] - bbox['min_y']) / grid_size) + 1)
 
     return [np.full((x_cells, y_cells), 'empty', dtype=object) for _ in floors]
 
@@ -84,10 +92,8 @@ def process_element(element, grids, bbox, floors, grid_size, total_elements, cur
     elif element.is_a() in door_types:
         element_type = 'door'
     elif element.is_a() in stair_types:
+        print("stair found")
         element_type = 'stair'
-        # Calculate the extended top of the stair
-        max_z = max(verts[i+2] for i in range(0, len(verts), 3))
-        extended_max_z = max_z + 0.1
     elif element.is_a() in floor_types:
         element_type = 'floor'
     else:
@@ -97,18 +103,16 @@ def process_element(element, grids, bbox, floors, grid_size, total_elements, cur
         triangle = [verts[faces[i] * 3:faces[i] * 3 + 3],
                     verts[faces[i + 1] * 3:faces[i + 1] * 3 + 3],
                     verts[faces[i + 2] * 3:faces[i + 2] * 3 + 3]]
-        if element_type == 'stair':
-            mark_cells(triangle, grids, bbox, floors, grid_size, element_type, extended_max_z)
-        else:
-            mark_cells(triangle, grids, bbox, floors, grid_size, element_type)
+        mark_cells(triangle, grids, bbox, floors, grid_size, element_type)
 
-def mark_cells(triangle, grids, bbox, floors, grid_size, element_type, extended_max_z=None):
+
+def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
     min_x = min(p[0] for p in triangle)
     max_x = max(p[0] for p in triangle)
     min_y = min(p[1] for p in triangle)
     max_y = max(p[1] for p in triangle)
     min_z = min(p[2] for p in triangle) + (-0.2 if element_type in ['stair', 'floor'] else 0.3)
-    max_z = extended_max_z if element_type == 'stair' else max(p[2] for p in triangle) - 0.3
+    max_z = max(p[2] for p in triangle) + (-0.3 if element_type not in ['stair'] else 0)
 
     start_x = max(0, int((min_x - bbox['min_x']) / grid_size))
     end_x = min(grids[0].shape[0] - 1, int((max_x - bbox['min_x']) / grid_size))
@@ -126,26 +130,29 @@ def mark_cells(triangle, grids, bbox, floors, grid_size, element_type, extended_
                     if element_type == 'floor' and current == 'empty':
                         grids[floor_index][x, y] = element_type
 
+
 def create_navigation_grid(ifc_file_path, grid_size=0.2):
     ifc_file = load_ifc_file(ifc_file_path)
     print("IFC file loaded...")
     bbox, floors = calculate_bounding_box_and_floors(ifc_file)
-    print("Bounding box and floors calculated... grid size: " + str(grid_size))
+    print(f"Bounding box and floors calculated... grid size: {grid_size}")
+    print(f"Number of floors: {len(floors)}")
+    for i, floor in enumerate(floors):
+        print(f"Floor {i + 1}: Elevation = {floor['elevation']}, Height = {floor['height']}")
+
     grids = create_faux_3d_grid(bbox, floors, grid_size)
     print("Empty grids created...")
+    print(f"Grid dimensions: {grids[0].shape}")
 
     elements_all = list(ifc_file.by_type('IfcProduct'))
-    elements = []
-    for element in elements_all:
-        if element.is_a():# in all_types:
-            elements.append(element)
+    elements = [element for element in elements_all if element.is_a() in all_types]
     total_elements = len(elements)
 
     for current_element, element in enumerate(elements, 1):
         if element.Representation:
             process_element(element, grids, bbox, floors, grid_size, total_elements, current_element)
 
-    print("\nProcessing complete!")  # New line after progress updates
+    print("\nProcessing complete!")
     return grids, bbox, floors
 
 
@@ -186,12 +193,26 @@ def export_grids(grids, bbox, floors, grid_size, filename):
     with open(filename, 'w') as f:
         json.dump(data, f)
 
+def main():
+    grid_size = input("Please select grid size in meters (0.3 default): ")
+    if grid_size:
+        grid_size = float(grid_size)
+    else:
+        grid_size = 0.3
+    if grid_size < 0 or grid_size > 10000:
+        grid_size = 0.3
+        print("invalid size, 0.3 selected")
+    fn = askopenfilename(filetypes=[("ifc files", "*.ifc")])
+    ifc_file_path = fn  # Replace with your IFC file path
+    try:
+        grids, bbox, floors = create_navigation_grid(ifc_file_path, grid_size=grid_size)
+        visualize_grids(grids, floors, grid_size)
+        export_grids(grids, bbox, floors, grid_size, 'bim_grids.json')
+        print("Grid creation, visualization, and export successful.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        print("Please check your IFC file and ensure it contains the necessary building elements.")
 
-# Usage
-grid_size = 0.3
-ifc_file_path = 'Duplex.ifc'  # Replace with your IFC file path
-grids, bbox, floors = create_navigation_grid(ifc_file_path, grid_size=grid_size)
-visualize_grids(grids, floors, grid_size)
 
-# Export the grids
-export_grids(grids, bbox, floors, grid_size, 'bim_grids.json')
+if __name__ == "__main__":
+    main()
