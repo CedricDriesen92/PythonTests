@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import heapq
 from matplotlib.widgets import Button, Slider
-from collections import defaultdict
 
 
 class Node:
@@ -27,6 +26,7 @@ class InteractiveBIMPathfinder:
         self.current_floor = 0
         self.speed = 10  # Default speed
         self.fig, self.ax = plt.subplots(figsize=(12, 9))
+        self.path = None
         self.setup_plot()
 
     def load_grid_data(self, filename):
@@ -81,10 +81,16 @@ class InteractiveBIMPathfinder:
         grid = self.grid_to_numeric(self.grids[self.current_floor])
         self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
-        if self.start:
+        if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal:
+        if self.goal and self.goal[2] == self.current_floor:
             self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+
+        if self.path:
+            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+            if path_on_floor:
+                path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+                self.ax.plot(path_x, path_y, color='blue', linewidth=2)
 
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
@@ -143,6 +149,7 @@ class InteractiveBIMPathfinder:
             print("Please set both start and goal points.")
             return
 
+        self.path = None  # Clear the previous path
         open_list = []
         closed_set = set()
         start_node = Node(self.start)
@@ -161,7 +168,8 @@ class InteractiveBIMPathfinder:
                 while current_node:
                     path.append(current_node.position)
                     current_node = current_node.parent
-                self.visualize_path(path[::-1])
+                self.path = path[::-1]
+                self.visualize_path()
                 return
 
             closed_set.add(current_node.position)
@@ -209,18 +217,18 @@ class InteractiveBIMPathfinder:
         closed_on_floor = [node for node in closed_set if node[2] == self.current_floor]
         if closed_on_floor:
             closed_x, closed_y = zip(*[(node[0], node[1]) for node in closed_on_floor])
-            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.5, s=50)
+            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.5, s=20)
 
         # Plot open list
         open_on_floor = [node.position for node in open_list if node.position[2] == self.current_floor]
         if open_on_floor:
             open_x, open_y = zip(*[(node[0], node[1]) for node in open_on_floor])
-            self.ax.scatter(open_x, open_y, color='cyan', alpha=0.5, s=50)
+            self.ax.scatter(open_x, open_y, color='cyan', alpha=0.5, s=20)
 
         # Plot start and goal
-        if self.start:
+        if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal:
+        if self.goal and self.goal[2] == self.current_floor:
             self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
 
         self.ax.set_title(f'Floor {self.current_floor + 1}')
@@ -228,27 +236,8 @@ class InteractiveBIMPathfinder:
         plt.draw()
         plt.pause(0.01)
 
-    def visualize_path(self, path):
-        self.ax.clear()
-        colors = ['white', 'gray', 'brown', 'red', 'beige']
-        color_map = ListedColormap(colors)
-
-        grid = self.grid_to_numeric(self.grids[self.current_floor])
-        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
-
-        path_on_floor = [node for node in path if node[2] == self.current_floor]
-        if path_on_floor:
-            path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-            self.ax.plot(path_x, path_y, color='blue', linewidth=2)
-
-        if self.start:
-            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal:
-            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
-
-        self.ax.set_title(f'Floor {self.current_floor + 1}')
-        self.ax.axis('off')
-        plt.draw()
+    def visualize_path(self):
+        self.update_plot()
 
 
 def main():
