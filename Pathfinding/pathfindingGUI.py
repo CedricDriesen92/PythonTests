@@ -1,12 +1,14 @@
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import heapq
 from matplotlib.widgets import Button, Slider, TextBox, RadioButtons
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
-tk.Tk().withdraw() # part of the import if you are not using other tkinter functions
+from scipy.interpolate import griddata
+
+tk.Tk().withdraw()  # part of the import if you are not using other tkinter functions
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 import line_profiler_pycharm
 from line_profiler_pycharm import profile
@@ -43,6 +45,8 @@ class InteractiveBIMPathfinder:
         self.algorithm = 'A*'
         self.animated = True
         self.fps = 1
+        self.show_heuristic = False
+        self.heuristic_resolution = 20
         self.setup_plot()
 
     def load_grid_data(self, filename):
@@ -66,7 +70,6 @@ class InteractiveBIMPathfinder:
         self.ax_animate = plt.axes([0.75, 0.7, 0.2, 0.1])
         self.ax_fps = plt.axes([0.75, 0.65, 0.2, 0.03])
 
-
         self.b_prev = Button(self.ax_prev, 'Previous')
         self.b_next = Button(self.ax_next, 'Next')
         self.b_start = Button(self.ax_start, 'Set Start')
@@ -87,6 +90,10 @@ class InteractiveBIMPathfinder:
         self.radio_minimize.on_clicked(self.set_minimize)
         self.radio_animate.on_clicked(self.set_animate)
         self.s_fps.on_changed(self.update_fps)
+
+        self.ax_heuristic = plt.axes([0.75, 0.35, 0.2, 0.05])
+        self.b_heuristic = Button(self.ax_heuristic, 'Toggle Heuristic')
+        self.b_heuristic.on_clicked(self.toggle_heuristic)
 
         self.mode = None
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
@@ -115,6 +122,57 @@ class InteractiveBIMPathfinder:
             numeric_grid[grid == element_type] = i
         return numeric_grid
 
+    def toggle_heuristic(self, event):
+        self.show_heuristic = not self.show_heuristic
+        self.update_plot()
+
+    def calculate_floor_heuristic(self):
+        if self.goal is None:
+            return None
+
+        heuristic_map = np.zeros(self.grids[self.current_floor].shape)
+        for x in range(self.grids[self.current_floor].shape[0]):
+            for y in range(self.grids[self.current_floor].shape[1]):
+                if self.grids[self.current_floor][x, y] != 'wall':
+                    heuristic_map[x, y] = self.heuristic((x, y, self.current_floor), self.goal)
+                else:
+                    heuristic_map[x, y] = np.nan  # Use NaN for walls to exclude them from the heatmap
+        return heuristic_map
+
+    def calculate_sparse_heuristic(self):
+        if self.goal is None:
+            return None
+
+        floor_shape = self.grids[self.current_floor].shape
+        x = np.linspace(0, floor_shape[0] - 1, self.heuristic_resolution)
+        y = np.linspace(0, floor_shape[1] - 1, self.heuristic_resolution)
+        xx, yy = np.meshgrid(x, y)
+
+        heuristic_values = []
+        for i in range(self.heuristic_resolution):
+            for j in range(self.heuristic_resolution):
+                x_coord = int(xx[i, j])
+                y_coord = int(yy[i, j])
+                if self.grids[self.current_floor][x_coord, y_coord] != 'wall':
+                    h_value = self.heuristic((x_coord, y_coord, self.current_floor), self.goal)
+                    heuristic_values.append((x_coord, y_coord, h_value))
+
+        if not heuristic_values:
+            return None
+
+        x_sparse, y_sparse, z_sparse = zip(*heuristic_values)
+
+        grid_x, grid_y = np.mgrid[0:floor_shape[0], 0:floor_shape[1]]
+        heuristic_map = griddata((x_sparse, y_sparse), z_sparse, (grid_x, grid_y), method='cubic')
+
+        # Set walls to NaN
+        for i in range(floor_shape[0]):
+            for j in range(floor_shape[1]):
+                if self.grids[self.current_floor][i, j] == 'wall':
+                    heuristic_map[i, j] = np.nan
+
+        return heuristic_map
+
     def update_plot(self):
         self.ax.clear()
         colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
@@ -123,6 +181,14 @@ class InteractiveBIMPathfinder:
         grid = self.grid_to_numeric(self.grids[self.current_floor])
         self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
+        if self.show_heuristic and self.goal:
+            heuristic_map = self.calculate_sparse_heuristic()
+            if heuristic_map is not None:
+                heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
+                self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
+                #plt.colorbar(heatmap, ax=self.ax)
+                #self.ax.axis('off')
+
         if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
         if self.goal and self.goal[2] == self.current_floor:
@@ -130,10 +196,12 @@ class InteractiveBIMPathfinder:
 
         if self.path:
             self.visualize_path()
-        self.ax.set_xlim(self.ax.get_xlim())  # Preserve zoom level
-        self.ax.set_ylim(self.ax.get_ylim())  # Preserve zoom level
+
+        self.ax.set_xlim(self.ax.get_xlim())
+        self.ax.set_ylim(self.ax.get_ylim())
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
+        #self.ax.get_legend().remove()
         plt.draw()
 
     def prev_floor(self, event):
@@ -165,8 +233,32 @@ class InteractiveBIMPathfinder:
         self.mode = None
         self.update_plot()
 
+    def find_nearest_stairs(self, position):
+        x, y, z = position
+        min_distance = float('inf')
+        nearest_stairs = None
+        for i in range(self.grids[z].shape[0]):
+            for j in range(self.grids[z].shape[1]):
+                if self.grids[z][i, j] == 'stair':
+                    distance = np.sqrt((x - i) ** 2 + (y - j) ** 2)
+                    if distance < min_distance:
+                        min_distance = distance
+                        nearest_stairs = (i, j, z)
+        return nearest_stairs
+
     def heuristic(self, a, b):
-        return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) * self.grid_size
+        if a[2] == b[2]:  # Same floor
+            return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) * self.grid_size
+        else:  # Different floors
+            nearest_stairs = self.find_nearest_stairs(a)
+            if nearest_stairs:
+                # Distance to nearest stairs + estimated distance from stairs to goal
+                return (np.sqrt((nearest_stairs[0] - a[0]) ** 2 + (nearest_stairs[1] - a[1]) ** 2) +
+                        np.sqrt((b[0] - nearest_stairs[0]) ** 2 + (b[1] - nearest_stairs[1]) ** 2) +
+                        abs(b[2] - a[2]) * 5) * self.grid_size  # Add floor change penalty
+            else:
+                # If no stairs found, use a large heuristic to avoid this path
+                return float('inf')
 
     def get_neighbors(self, current):
         x, y, z = current.position
@@ -184,6 +276,17 @@ class InteractiveBIMPathfinder:
 
         return neighbors
 
+    def get_cost(self, current, neighbor):
+        if self.minimize_cost:
+            cost = self.grid_size
+            if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
+                cost += 5 * self.grid_size
+            elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
+                cost += 1.0 * self.grid_size
+            return cost
+        else:
+            return self.heuristic(current.position, neighbor.position)
+
     def run_algorithm(self, event):
         if not self.start or not self.goal:
             print("Please set both start and goal points.")
@@ -195,8 +298,61 @@ class InteractiveBIMPathfinder:
         elif self.algorithm == 'BFS':
             self.run_bfs()
 
-    @profile
     def run_astar(self, event):
+        fps = 1
+        time0 = timer()
+        self.path = None
+        open_list = []
+        closed_set = set()
+        start_node = Node(self.start)
+        goal_node = Node(self.goal)
+
+        heapq.heappush(open_list, (start_node.f, start_node))
+
+        progress_counter = 0
+        progress_threshold = max(1, int(100 / self.speed))
+
+        while open_list:
+            current_node = heapq.heappop(open_list)[1]
+
+            if current_node.position == goal_node.position:
+                self.reconstruct_path(current_node)
+                return
+
+            closed_set.add(current_node.position)
+
+            for neighbor in self.get_neighbors(current_node):
+                if neighbor.position in closed_set:
+                    continue
+
+                tentative_g = current_node.g + self.get_cost(current_node, neighbor)
+
+                if not any(node.position == neighbor.position for _, node in open_list):
+                    neighbor.g = tentative_g
+                    neighbor.h = self.heuristic(neighbor.position, goal_node.position)
+                    neighbor.f = neighbor.g + neighbor.h
+                    neighbor.parent = current_node
+                    heapq.heappush(open_list, (neighbor.f, neighbor))
+                else:
+                    for i, (f, node) in enumerate(open_list):
+                        if node.position == neighbor.position and tentative_g < node.g:
+                            node.g = tentative_g
+                            node.f = node.g + node.h
+                            node.parent = current_node
+                            heapq.heapify(open_list)
+                            break
+
+            progress_counter += 1
+            if progress_threshold == 0 or progress_counter >= progress_threshold:
+                if timer() - time0 > 1.0 / fps:
+                    time0 = timer()
+                    self.visualize_progress(closed_set, [node for _, node in open_list], self.get_current_path(current_node))
+                    progress_counter = 0
+
+        print("No path found.")
+
+    @profile
+    def run_astar_old(self, event):
         if not self.start or not self.goal:
             print("Please set both start and goal points.")
             return
@@ -225,7 +381,6 @@ class InteractiveBIMPathfinder:
                         path_length += self.heuristic(current_node.position, current_node.parent.position)
                     current_node = current_node.parent
                 self.path = path[::-1]
-
 
                 self.t_pathlength.set_val(f"{path_length:.2f}")
                 self.visualize_path()
@@ -262,7 +417,7 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer()-time0 > 1.0/fps and self.animated:
+                if timer() - time0 > 1.0 / fps and self.animated:
                     time0 = timer()
                     current_path = []
                     temp_node = current_node
@@ -348,6 +503,13 @@ class InteractiveBIMPathfinder:
         self.ax.axis('off')
         plt.draw()
         plt.pause(0.001)
+
+    def get_current_path(self, node):
+        path = []
+        while node:
+            path.append(node.position)
+            node = node.parent
+        return path[::-1]
 
 
 def main():
