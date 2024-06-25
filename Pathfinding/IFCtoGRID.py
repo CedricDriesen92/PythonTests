@@ -111,8 +111,8 @@ def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
     max_x = max(p[0] for p in triangle)
     min_y = min(p[1] for p in triangle)
     max_y = max(p[1] for p in triangle)
-    min_z = min(p[2] for p in triangle) + (-0.2 if element_type in ['stair', 'floor'] else 0.3)
-    max_z = max(p[2] for p in triangle) + (-0.3 if element_type not in ['stair'] else 0)
+    min_z = min(p[2] for p in triangle) + (-0.3 if element_type in ['stair', 'floor'] else 0.3)
+    max_z = max(p[2] for p in triangle) + (-0.5 if element_type not in ['stair'] else 0.3)
 
     start_x = max(0, int((min_x - bbox['min_x']) / grid_size))
     end_x = min(grids[0].shape[0] - 1, int((max_x - bbox['min_x']) / grid_size))

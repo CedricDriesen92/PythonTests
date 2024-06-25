@@ -6,10 +6,11 @@ from tkinter.filedialog import askopenfilename, asksaveasfilename
 from matplotlib.widgets import Button, RadioButtons
 
 class InteractiveGridEditor:
-    def __init__(self, grids, grid_size, floors):
+    def __init__(self, grids, grid_size, floors, bbox):
         self.grids = grids
         self.grid_size = grid_size
         self.floors = floors
+        self.bbox = bbox
         self.current_floor = 0
         self.current_element = 'wall'
         self.fig, self.ax = plt.subplots(figsize=(12, 8))
@@ -90,6 +91,7 @@ class InteractiveGridEditor:
         if filename:
             data = {
                 'grids': [grid.tolist() for grid in self.grids],
+                'bbox': self.bbox,
                 'grid_size': self.grid_size,
                 'floors': self.floors
             }
@@ -101,14 +103,14 @@ def load_grid_data(filename):
     with open(filename, 'r') as f:
         data = json.load(f)
     grids = [np.array(grid) for grid in data['grids']]
-    return grids, data['grid_size'], data['floors']
+    return grids, data['grid_size'], data['floors'], data['bbox']
 
 def main():
     tk.Tk().withdraw()
     fn = askopenfilename(filetypes=[("JSON files", "*.json")])
     if fn:
-        grids, grid_size, floors = load_grid_data(fn)
-        editor = InteractiveGridEditor(grids, grid_size, floors)
+        grids, grid_size, floors, bbox = load_grid_data(fn)
+        editor = InteractiveGridEditor(grids, grid_size, floors, bbox)
         plt.show()
     else:
         print("No file selected.")

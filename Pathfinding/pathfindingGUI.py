@@ -54,7 +54,7 @@ class InteractiveBIMPathfinder:
         self.b_start = Button(self.ax_start, 'Set Start')
         self.b_goal = Button(self.ax_goal, 'Set Goal')
         self.b_run = Button(self.ax_run, 'Run A*')
-        self.s_speed = Slider(self.ax_speed, 'Speed', 1, 100, valinit=self.speed, valstep=1)
+        self.s_speed = Slider(self.ax_speed, 'Delay', 1, 100, valinit=self.speed, valstep=0.1)
 
         self.b_prev.on_clicked(self.prev_floor)
         self.b_next.on_clicked(self.next_floor)
@@ -80,7 +80,7 @@ class InteractiveBIMPathfinder:
 
     def update_plot(self):
         self.ax.clear()
-        colors = ['white', 'gray', 'orange', 'red', 'beige']
+        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
         color_map = ListedColormap(colors)
 
         grid = self.grid_to_numeric(self.grids[self.current_floor])
@@ -92,10 +92,11 @@ class InteractiveBIMPathfinder:
             self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
 
         if self.path:
-            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-            if path_on_floor:
-                path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-                self.ax.plot(path_x, path_y, color='blue', linewidth=2)
+            self.visualize_path()
+            # path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+            # if path_on_floor:
+            #     path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+            #     self.ax.plot(path_x, path_y, color='blue', linewidth=2)
 
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
@@ -163,7 +164,9 @@ class InteractiveBIMPathfinder:
         heapq.heappush(open_list, (start_node.f, start_node))
 
         progress_counter = 0
+
         progress_threshold = max(1, int(100 / self.speed))
+
 
         while open_list:
             current_node = heapq.heappop(open_list)[1]
@@ -187,7 +190,7 @@ class InteractiveBIMPathfinder:
                 if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
                     neighbor.g += 5 * self.grid_size  # Higher cost for doors
                 elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
-                    neighbor.g += 1.5 * self.grid_size  # Moderate cost for stairs
+                    neighbor.g += 1.0 * self.grid_size  # Moderate cost for stairs
 
                 neighbor.h = self.heuristic(neighbor.position, goal_node.position)
                 neighbor.f = neighbor.g + neighbor.h
@@ -204,7 +207,7 @@ class InteractiveBIMPathfinder:
                             break
 
             progress_counter += 1
-            if progress_counter >= progress_threshold:
+            if progress_threshold == 0 or progress_counter >= progress_threshold:
                 self.visualize_progress(closed_set, [node for _, node in open_list])
                 progress_counter = 0
 
@@ -242,7 +245,35 @@ class InteractiveBIMPathfinder:
         plt.pause(0.01)
 
     def visualize_path(self):
-        self.update_plot()
+        self.ax.clear()
+        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        color_map = ListedColormap(colors)
+
+        grid = self.grid_to_numeric(self.grids[self.current_floor])
+        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
+
+        if self.path:
+            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+            for i in range(len(path_on_floor) - 1):
+                start = path_on_floor[i]
+                end = path_on_floor[i + 1]
+
+                # Check if this segment is continuous or a jump
+                if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
+                    # Discontinuous segment - draw in green
+                    self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
+                else:
+                    # Continuous segment - draw in blue
+                    self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
+
+        if self.start and self.start[2] == self.current_floor:
+            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
+        if self.goal and self.goal[2] == self.current_floor:
+            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+
+        self.ax.set_title(f'Floor {self.current_floor + 1}')
+        self.ax.axis('off')
+        plt.draw()
 
 
 def main():
