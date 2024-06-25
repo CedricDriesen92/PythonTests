@@ -262,7 +262,7 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer()-time0 > 1.0/fps:
+                if timer()-time0 > 1.0/fps and self.animated:
                     time0 = timer()
                     current_path = []
                     temp_node = current_node
