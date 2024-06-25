@@ -39,6 +39,10 @@ class InteractiveBIMPathfinder:
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
         self.path = None
+        self.minimize_cost = True
+        self.algorithm = 'A*'
+        self.animated = True
+        self.fps = 1
         self.setup_plot()
 
     def load_grid_data(self, filename):
@@ -58,6 +62,10 @@ class InteractiveBIMPathfinder:
         self.ax_pathlength = plt.axes([0.9, 0.15, 0.075, 0.03])
         self.ax.set_xlim(0, self.grids[0].shape[1])
         self.ax.set_ylim(0, self.grids[0].shape[0])
+        self.ax_minimize = plt.axes([0.75, 0.25, 0.2, 0.1])
+        self.ax_animate = plt.axes([0.75, 0.7, 0.2, 0.1])
+        self.ax_fps = plt.axes([0.75, 0.65, 0.2, 0.03])
+
 
         self.b_prev = Button(self.ax_prev, 'Previous')
         self.b_next = Button(self.ax_next, 'Next')
@@ -66,6 +74,9 @@ class InteractiveBIMPathfinder:
         self.b_run = Button(self.ax_run, 'Run A*')
         self.s_speed = Slider(self.ax_speed, 'Delay', 1, 100, valinit=self.speed, valstep=0.1)
         self.t_pathlength = TextBox(self.ax_pathlength, 'Path Length:', initial='0')
+        self.radio_minimize = RadioButtons(self.ax_minimize, ('Cost', 'Distance'))
+        self.radio_animate = RadioButtons(self.ax_animate, ('Yes', 'No'))
+        self.s_fps = Slider(self.ax_fps, 'fps', 0.1, 120, valinit=self.speed, valstep=0.1)
 
         self.b_prev.on_clicked(self.prev_floor)
         self.b_next.on_clicked(self.next_floor)
@@ -73,14 +84,29 @@ class InteractiveBIMPathfinder:
         self.b_goal.on_clicked(self.set_goal_mode)
         self.b_run.on_clicked(self.run_astar)
         self.s_speed.on_changed(self.update_speed)
+        self.radio_minimize.on_clicked(self.set_minimize)
+        self.radio_animate.on_clicked(self.set_animate)
+        self.s_fps.on_changed(self.update_fps)
 
         self.mode = None
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
 
         self.update_plot()
 
+    def set_algorithm(self, label):
+        self.algorithm = label
+
+    def set_minimize(self, label):
+        self.minimize_cost = (label == 'Cost')
+
+    def set_animate(self, label):
+        self.animated = (label == 'Yes')
+
     def update_speed(self, val):
         self.speed = int(val)
+
+    def update_fps(self, val):
+        self.fps = float(val)
 
     def grid_to_numeric(self, grid):
         element_types = ['empty', 'wall', 'door', 'stair', 'floor']
@@ -158,12 +184,23 @@ class InteractiveBIMPathfinder:
 
         return neighbors
 
+    def run_algorithm(self, event):
+        if not self.start or not self.goal:
+            print("Please set both start and goal points.")
+            return
+        if self.algorithm == 'A*':
+            self.run_astar()
+        elif self.algorithm == 'Dijkstra':
+            self.run_dijkstra()
+        elif self.algorithm == 'BFS':
+            self.run_bfs()
+
     @profile
     def run_astar(self, event):
         if not self.start or not self.goal:
             print("Please set both start and goal points.")
             return
-        fps = 1
+        fps = self.fps
         time0 = timer()
         self.path = None  # Clear the previous path
         open_list = []
@@ -179,7 +216,6 @@ class InteractiveBIMPathfinder:
 
         while open_list:
             current_node = heapq.heappop(open_list)[1]
-            skipdraw = True
             if current_node.position == goal_node.position:
                 path = []
                 path_length = 0
@@ -203,9 +239,12 @@ class InteractiveBIMPathfinder:
 
                 neighbor.g = current_node.g + self.grid_size
                 if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
-                    neighbor.g += 5 * self.grid_size  # Higher cost for doors
+                    if self.minimize_cost:
+                        neighbor.g += 5 * self.grid_size  # Higher cost for doors
+
                 elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
-                    neighbor.g += 1.0 * self.grid_size  # Moderate cost for stairs
+                    if self.minimize_cost:
+                        neighbor.g += 1.0 * self.grid_size  # Moderate cost for stairs
 
                 neighbor.h = self.heuristic(neighbor.position, goal_node.position)
                 neighbor.f = neighbor.g + neighbor.h
