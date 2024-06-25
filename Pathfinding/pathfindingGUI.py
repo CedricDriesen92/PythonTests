@@ -282,7 +282,7 @@ class InteractiveBIMPathfinder:
             if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
                 cost += 5 * self.grid_size
             elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
-                cost += 1.0 * self.grid_size
+                cost += 1.25 * self.grid_size
             return cost
         else:
             return self.heuristic(current.position, neighbor.position)
@@ -293,10 +293,6 @@ class InteractiveBIMPathfinder:
             return
         if self.algorithm == 'A*':
             self.run_astar()
-        elif self.algorithm == 'Dijkstra':
-            self.run_dijkstra()
-        elif self.algorithm == 'BFS':
-            self.run_bfs()
 
     def run_astar(self, event):
         fps = 1
@@ -316,6 +312,7 @@ class InteractiveBIMPathfinder:
             current_node = heapq.heappop(open_list)[1]
 
             if current_node.position == goal_node.position:
+                self.visualize_progress(closed_set, [node for _, node in open_list], None)
                 self.reconstruct_path(current_node)
                 return
 
@@ -344,95 +341,25 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer() - time0 > 1.0 / fps:
+                if timer() - time0 > 1.0 / fps and self.animated:
                     time0 = timer()
                     self.visualize_progress(closed_set, [node for _, node in open_list], self.get_current_path(current_node))
                     progress_counter = 0
 
         print("No path found.")
 
-    @profile
-    def run_astar_old(self, event):
-        if not self.start or not self.goal:
-            print("Please set both start and goal points.")
-            return
-        fps = self.fps
-        time0 = timer()
-        self.path = None  # Clear the previous path
-        open_list = []
-        closed_set = set()
-        start_node = Node(self.start)
-        goal_node = Node(self.goal)
+    def reconstruct_path(self, node):
+        path = []
+        path_length = 0
+        while node:
+            path.append(node.position)
+            if node.parent:
+                path_length += self.heuristic(node.position, node.parent.position)
+            node = node.parent
+        self.path = path[::-1]
+        self.t_pathlength.set_val(f"{path_length:.2f}")
+        self.visualize_path()
 
-        heapq.heappush(open_list, (start_node.f, start_node))
-
-        progress_counter = 0
-
-        progress_threshold = max(1, int(100 / self.speed))
-
-        while open_list:
-            current_node = heapq.heappop(open_list)[1]
-            if current_node.position == goal_node.position:
-                path = []
-                path_length = 0
-                while current_node:
-                    path.append(current_node.position)
-                    if current_node.parent:
-                        path_length += self.heuristic(current_node.position, current_node.parent.position)
-                    current_node = current_node.parent
-                self.path = path[::-1]
-
-                self.t_pathlength.set_val(f"{path_length:.2f}")
-                self.visualize_path()
-                return
-
-            closed_set.add(current_node.position)
-
-            for neighbor in self.get_neighbors(current_node):
-                if neighbor.position in closed_set:
-                    continue
-
-                neighbor.g = current_node.g + self.grid_size
-                if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
-                    if self.minimize_cost:
-                        neighbor.g += 5 * self.grid_size  # Higher cost for doors
-
-                elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
-                    if self.minimize_cost:
-                        neighbor.g += 1.0 * self.grid_size  # Moderate cost for stairs
-
-                neighbor.h = self.heuristic(neighbor.position, goal_node.position)
-                neighbor.f = neighbor.g + neighbor.h
-                neighbor.parent = current_node
-
-                if not any(node.position == neighbor.position for _, node in open_list):
-                    heapq.heappush(open_list, (neighbor.f, neighbor))
-                else:
-                    # Update existing node if this path is better
-                    for i, (f, node) in enumerate(open_list):
-                        if node.position == neighbor.position and neighbor.g < node.g:
-                            open_list[i] = (neighbor.f, neighbor)
-                            heapq.heapify(open_list)
-                            break
-
-            progress_counter += 1
-            if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer() - time0 > 1.0 / fps and self.animated:
-                    time0 = timer()
-                    current_path = []
-                    temp_node = current_node
-                    current_path_length = 0
-                    while temp_node:
-                        current_path.append(temp_node.position)
-                        if temp_node.parent:
-                            current_path_length += self.heuristic(temp_node.position, temp_node.parent.position)
-                        temp_node = temp_node.parent
-                    current_path = current_path[::-1]
-                    self.t_pathlength.set_val(f"{current_path_length:.2f}")
-                    self.visualize_progress(closed_set, [node for _, node in open_list], current_path)
-                    progress_counter = 0
-
-        print("No path found.")
 
     @profile
     def visualize_progress(self, closed_set, open_list, current_path):
@@ -456,10 +383,11 @@ class InteractiveBIMPathfinder:
             self.ax.scatter(open_x, open_y, color='aqua', alpha=0.4, s=20)
 
         # Plot current path
-        current_path_on_floor = [node for node in current_path if node[2] == self.current_floor]
-        if len(current_path_on_floor) > 1:
-            path_x, path_y = zip(*[(node[0], node[1]) for node in current_path_on_floor])
-            self.ax.plot(path_x, path_y, color='yellow', linewidth=2)
+        if current_path:
+            current_path_on_floor = [node for node in current_path if node[2] == self.current_floor]
+            if len(current_path_on_floor) > 1:
+                path_x, path_y = zip(*[(node[0], node[1]) for node in current_path_on_floor])
+                self.ax.plot(path_x, path_y, color='yellow', linewidth=2)
 
         # Plot start and goal
         if self.start and self.start[2] == self.current_floor:
