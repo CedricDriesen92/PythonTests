@@ -45,7 +45,7 @@ class InteractiveGridEditor:
             'floor': 'lavenderblush',
             'door': 'orange',
             'stair': 'red',
-            'empty': 'white'
+            'empty': 'lightgray'
         }
 
         for element_type in ['empty', 'wall', 'stair', 'floor', 'door']:

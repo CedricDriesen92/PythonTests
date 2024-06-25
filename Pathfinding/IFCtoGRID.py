@@ -68,11 +68,13 @@ def calculate_bounding_box_and_floors(ifc_file):
 
 
 def create_faux_3d_grid(bbox, floors, grid_size=0.2):
-    x_cells = max(1, int((bbox['max_x'] - bbox['min_x']) / grid_size) + 1)
-    y_cells = max(1, int((bbox['max_y'] - bbox['min_y']) / grid_size) + 1)
+    x_size = bbox['max_x'] - bbox['min_x']
+    y_size = bbox['max_y'] - bbox['min_y']
+
+    x_cells = int(np.ceil(x_size / grid_size)) + 2  # +2 for one extra on each side
+    y_cells = int(np.ceil(y_size / grid_size)) + 2  # +2 for one extra on each side
 
     return [np.full((x_cells, y_cells), 'empty', dtype=object) for _ in floors]
-
 
 def process_element(element, grids, bbox, floors, grid_size, total_elements, current_element):
     settings = ifcopenshell.geom.settings()
@@ -106,6 +108,31 @@ def process_element(element, grids, bbox, floors, grid_size, total_elements, cur
         mark_cells(triangle, grids, bbox, floors, grid_size, element_type)
 
 
+def trim_and_pad_grids(grids, padding=1):
+    trimmed_grids = []
+
+    for grid in grids:
+        # Find the bounds of non-empty cells
+        non_empty = np.argwhere(grid != 'empty')
+        if len(non_empty) == 0:
+            trimmed_grids.append(grid)  # If the grid is entirely empty, don't trim
+            continue
+
+        min_x, min_y = non_empty.min(axis=0)
+        max_x, max_y = non_empty.max(axis=0)
+
+        # Trim the grid
+        trimmed = grid[max(0, min_x - padding):min(grid.shape[0], max_x + padding + 1),
+                  max(0, min_y - padding):min(grid.shape[1], max_y + padding + 1)]
+
+        # Add padding if necessary
+        padded = np.full((trimmed.shape[0] + 2 * padding, trimmed.shape[1] + 2 * padding), 'empty', dtype=object)
+        padded[padding:-padding, padding:-padding] = trimmed
+
+        trimmed_grids.append(padded)
+
+    return trimmed_grids
+
 def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
     min_x = min(p[0] for p in triangle)
     max_x = max(p[0] for p in triangle)
@@ -114,10 +141,10 @@ def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
     min_z = min(p[2] for p in triangle) + (-0.3 if element_type in ['stair', 'floor'] else 0.3)
     max_z = max(p[2] for p in triangle) + (-0.5 if element_type not in ['stair'] else 0.3)
 
-    start_x = max(0, int((min_x - bbox['min_x']) / grid_size))
-    end_x = min(grids[0].shape[0] - 1, int((max_x - bbox['min_x']) / grid_size))
-    start_y = max(0, int((min_y - bbox['min_y']) / grid_size))
-    end_y = min(grids[0].shape[1] - 1, int((max_y - bbox['min_y']) / grid_size))
+    start_x = max(1, int((min_x - bbox['min_x']) / grid_size) + 1)
+    end_x = min(grids[0].shape[0] - 2, int((max_x - bbox['min_x']) / grid_size) + 1)
+    start_y = max(1, int((min_y - bbox['min_y']) / grid_size) + 1)
+    end_y = min(grids[0].shape[1] - 2, int((max_y - bbox['min_y']) / grid_size) + 1)
 
     for floor_index, floor in enumerate(floors):
         if min_z < floor['elevation'] + floor['height'] and max_z > floor['elevation']:
@@ -129,7 +156,6 @@ def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
                         grids[floor_index][x, y] = element_type
                     if element_type == 'floor' and current == 'empty':
                         grids[floor_index][x, y] = element_type
-
 
 def create_navigation_grid(ifc_file_path, grid_size=0.2):
     ifc_file = load_ifc_file(ifc_file_path)
@@ -153,6 +179,17 @@ def create_navigation_grid(ifc_file_path, grid_size=0.2):
             process_element(element, grids, bbox, floors, grid_size, total_elements, current_element)
 
     print("\nProcessing complete!")
+    # Trim and pad the grids
+    grids = trim_and_pad_grids(grids)
+
+    # Update bbox to reflect the new grid dimensions
+    x_size = grids[0].shape[0] * grid_size
+    y_size = grids[0].shape[1] * grid_size
+    bbox['min_x'] -= grid_size  # Account for padding
+    bbox['min_y'] -= grid_size  # Account for padding
+    bbox['max_x'] = bbox['min_x'] + x_size
+    bbox['max_y'] = bbox['min_y'] + y_size
+
     return grids, bbox, floors
 
 
