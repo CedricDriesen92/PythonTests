@@ -3,12 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import heapq
-from matplotlib.widgets import Button, Slider
+from matplotlib.widgets import Button, Slider, TextBox, RadioButtons
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
 tk.Tk().withdraw() # part of the import if you are not using other tkinter functions
-
-
+from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+import line_profiler_pycharm
+from line_profiler_pycharm import profile
+from timeit import default_timer as timer
 
 
 class Node:
@@ -29,8 +31,13 @@ class InteractiveBIMPathfinder:
         self.start = None
         self.goal = None
         self.current_floor = 0
-        self.speed = 10  # Default speed
+        self.speed = 1  # Default speed
         self.fig, self.ax = plt.subplots(figsize=(12, 9))
+        self.canvas = self.fig.canvas
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.fig.canvas.get_tk_widget().master)
+        self.toolbar.update()
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
         self.path = None
         self.setup_plot()
 
@@ -48,6 +55,9 @@ class InteractiveBIMPathfinder:
         self.ax_goal = plt.axes([0.53, 0.15, 0.1, 0.075])
         self.ax_run = plt.axes([0.64, 0.15, 0.1, 0.075])
         self.ax_speed = plt.axes([0.2, 0.05, 0.6, 0.03])
+        self.ax_pathlength = plt.axes([0.9, 0.15, 0.075, 0.03])
+        self.ax.set_xlim(0, self.grids[0].shape[1])
+        self.ax.set_ylim(0, self.grids[0].shape[0])
 
         self.b_prev = Button(self.ax_prev, 'Previous')
         self.b_next = Button(self.ax_next, 'Next')
@@ -55,6 +65,7 @@ class InteractiveBIMPathfinder:
         self.b_goal = Button(self.ax_goal, 'Set Goal')
         self.b_run = Button(self.ax_run, 'Run A*')
         self.s_speed = Slider(self.ax_speed, 'Delay', 1, 100, valinit=self.speed, valstep=0.1)
+        self.t_pathlength = TextBox(self.ax_pathlength, 'Path Length:', initial='0')
 
         self.b_prev.on_clicked(self.prev_floor)
         self.b_next.on_clicked(self.next_floor)
@@ -93,11 +104,8 @@ class InteractiveBIMPathfinder:
 
         if self.path:
             self.visualize_path()
-            # path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-            # if path_on_floor:
-            #     path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-            #     self.ax.plot(path_x, path_y, color='blue', linewidth=2)
-
+        self.ax.set_xlim(self.ax.get_xlim())  # Preserve zoom level
+        self.ax.set_ylim(self.ax.get_ylim())  # Preserve zoom level
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
         plt.draw()
@@ -150,11 +158,13 @@ class InteractiveBIMPathfinder:
 
         return neighbors
 
+    @profile
     def run_astar(self, event):
         if not self.start or not self.goal:
             print("Please set both start and goal points.")
             return
-
+        fps = 1
+        time0 = timer()
         self.path = None  # Clear the previous path
         open_list = []
         closed_set = set()
@@ -167,16 +177,21 @@ class InteractiveBIMPathfinder:
 
         progress_threshold = max(1, int(100 / self.speed))
 
-
         while open_list:
             current_node = heapq.heappop(open_list)[1]
-
+            skipdraw = True
             if current_node.position == goal_node.position:
                 path = []
+                path_length = 0
                 while current_node:
                     path.append(current_node.position)
+                    if current_node.parent:
+                        path_length += self.heuristic(current_node.position, current_node.parent.position)
                     current_node = current_node.parent
                 self.path = path[::-1]
+
+
+                self.t_pathlength.set_val(f"{path_length:.2f}")
                 self.visualize_path()
                 return
 
@@ -208,14 +223,27 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                self.visualize_progress(closed_set, [node for _, node in open_list])
-                progress_counter = 0
+                if timer()-time0 > 1.0/fps:
+                    time0 = timer()
+                    current_path = []
+                    temp_node = current_node
+                    current_path_length = 0
+                    while temp_node:
+                        current_path.append(temp_node.position)
+                        if temp_node.parent:
+                            current_path_length += self.heuristic(temp_node.position, temp_node.parent.position)
+                        temp_node = temp_node.parent
+                    current_path = current_path[::-1]
+                    self.t_pathlength.set_val(f"{current_path_length:.2f}")
+                    self.visualize_progress(closed_set, [node for _, node in open_list], current_path)
+                    progress_counter = 0
 
         print("No path found.")
 
-    def visualize_progress(self, closed_set, open_list):
+    @profile
+    def visualize_progress(self, closed_set, open_list, current_path):
         self.ax.clear()
-        colors = ['white', 'black', 'orange', 'red', 'lavenderblush'] #Nothing, wall, door, stair, floor
+        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
         color_map = ListedColormap(colors)
 
         grid = self.grid_to_numeric(self.grids[self.current_floor])
@@ -225,13 +253,19 @@ class InteractiveBIMPathfinder:
         closed_on_floor = [node for node in closed_set if node[2] == self.current_floor]
         if closed_on_floor:
             closed_x, closed_y = zip(*[(node[0], node[1]) for node in closed_on_floor])
-            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.5, s=20)
+            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.1, s=20)
 
         # Plot open list
         open_on_floor = [node.position for node in open_list if node.position[2] == self.current_floor]
         if open_on_floor:
             open_x, open_y = zip(*[(node[0], node[1]) for node in open_on_floor])
-            self.ax.scatter(open_x, open_y, color='cyan', alpha=0.5, s=20)
+            self.ax.scatter(open_x, open_y, color='aqua', alpha=0.4, s=20)
+
+        # Plot current path
+        current_path_on_floor = [node for node in current_path if node[2] == self.current_floor]
+        if len(current_path_on_floor) > 1:
+            path_x, path_y = zip(*[(node[0], node[1]) for node in current_path_on_floor])
+            self.ax.plot(path_x, path_y, color='yellow', linewidth=2)
 
         # Plot start and goal
         if self.start and self.start[2] == self.current_floor:
@@ -274,6 +308,7 @@ class InteractiveBIMPathfinder:
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
         plt.draw()
+        plt.pause(0.001)
 
 
 def main():
