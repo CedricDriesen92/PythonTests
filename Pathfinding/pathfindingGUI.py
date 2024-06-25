@@ -1,10 +1,9 @@
+import json
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import tkinter as tk
-from tkinter import ttk
+from matplotlib.colors import ListedColormap
 import heapq
-import json
+from matplotlib.widgets import Button
 
 
 class Node:
@@ -19,171 +18,229 @@ class Node:
         return self.f < other.f
 
 
-def heuristic(a, b):
-    return np.sum(np.abs(np.array(a) - np.array(b)))
-
-
-def get_neighbors(current, grid):
-    x, y, z = current.position
-    neighbors = []
-    for dx, dy, dz in [(0, 1, 0), (1, 0, 0), (-1, 0, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]:
-        nx, ny, nz = x + dx, y + dy, z + dz
-        if 0 <= nx < grid.shape[0] and 0 <= ny < grid.shape[1] and 0 <= nz < grid.shape[2]:
-            if grid[nx, ny, nz] != 'wall':
-                neighbors.append(Node((nx, ny, nz)))
-    return neighbors
-
-
-def a_star(grid, start, end):
-    start_node = Node(start)
-    end_node = Node(end)
-
-    open_list = []
-    closed_set = set()
-
-    heapq.heappush(open_list, start_node)
-
-    while open_list:
-        current_node = heapq.heappop(open_list)
-        closed_set.add(current_node.position)
-
-        if current_node.position == end_node.position:
-            path = []
-            while current_node:
-                path.append(current_node.position)
-                current_node = current_node.parent
-            return path[::-1]
-
-        for neighbor in get_neighbors(current_node, grid):
-            if neighbor.position in closed_set:
-                continue
-
-            neighbor.g = current_node.g + 1
-            if grid[neighbor.position] == 'door':
-                neighbor.g += 5  # Higher cost for doors
-            elif grid[neighbor.position] == 'stair':
-                neighbor.g += 2  # Moderate cost for stairs
-
-            neighbor.h = heuristic(neighbor.position, end_node.position)
-            neighbor.f = neighbor.g + neighbor.h
-            neighbor.parent = current_node
-
-            if neighbor not in open_list:
-                heapq.heappush(open_list, neighbor)
-            else:
-                idx = open_list.index(neighbor)
-                if open_list[idx].g > neighbor.g:
-                    open_list[idx] = neighbor
-                    heapq.heapify(open_list)
-
-    return None  # No path found
-
-
-class BIMPathfinder:
-    def __init__(self, master):
-        self.master = master
-        self.grid = None
-        self.bbox = None
+class InteractiveBIMPathfinder:
+    def __init__(self, filename):
+        self.grids, self.bbox, self.floors, self.grid_size = self.load_grid_data(filename)
         self.start = None
-        self.end = None
-        self.path = None
+        self.goal = None
+        self.current_floor = 0
+        self.fig, self.ax = plt.subplots(figsize=(10, 8))
+        self.setup_plot()
 
-        self.fig = plt.figure(figsize=(10, 8))
-        self.ax = self.fig.add_subplot(111, projection='3d')
+    def load_grid_data(self, filename):
+        with open(filename, 'r') as f:
+            data = json.load(f)
+        grids = [np.array(grid) for grid in data['grids']]
+        return grids, data['bbox'], data['floors'], data['grid_size']
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.master)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+    def setup_plot(self):
+        plt.subplots_adjust(bottom=0.2)
+        self.ax_prev = plt.axes([0.2, 0.05, 0.1, 0.075])
+        self.ax_next = plt.axes([0.31, 0.05, 0.1, 0.075])
+        self.ax_start = plt.axes([0.42, 0.05, 0.1, 0.075])
+        self.ax_goal = plt.axes([0.53, 0.05, 0.1, 0.075])
+        self.ax_run = plt.axes([0.64, 0.05, 0.1, 0.075])
 
-        self.controls_frame = ttk.Frame(self.master)
-        self.controls_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.b_prev = Button(self.ax_prev, 'Previous')
+        self.b_next = Button(self.ax_next, 'Next')
+        self.b_start = Button(self.ax_start, 'Set Start')
+        self.b_goal = Button(self.ax_goal, 'Set Goal')
+        self.b_run = Button(self.ax_run, 'Run A*')
 
-        self.load_button = ttk.Button(self.controls_frame, text="Load Grid", command=self.load_grid)
-        self.load_button.grid(row=0, column=0, columnspan=2)
+        self.b_prev.on_clicked(self.prev_floor)
+        self.b_next.on_clicked(self.next_floor)
+        self.b_start.on_clicked(self.set_start_mode)
+        self.b_goal.on_clicked(self.set_goal_mode)
+        self.b_run.on_clicked(self.run_astar)
 
-        ttk.Label(self.controls_frame, text="Start:").grid(row=1, column=0)
-        self.start_entry = ttk.Entry(self.controls_frame)
-        self.start_entry.grid(row=1, column=1)
+        self.mode = None
+        self.fig.canvas.mpl_connect('button_press_event', self.on_click)
 
-        ttk.Label(self.controls_frame, text="End:").grid(row=2, column=0)
-        self.end_entry = ttk.Entry(self.controls_frame)
-        self.end_entry.grid(row=2, column=1)
+        self.update_plot()
 
-        self.find_path_button = ttk.Button(self.controls_frame, text="Find Path", command=self.find_path)
-        self.find_path_button.grid(row=3, column=0, columnspan=2)
+    def grid_to_numeric(self, grid):
+        element_types = ['empty', 'wall', 'door', 'stair', 'floor']
+        numeric_grid = np.zeros_like(grid, dtype=int)
+        for i, element_type in enumerate(element_types):
+            numeric_grid[grid == element_type] = i
+        return numeric_grid
 
-    def load_grid(self):
-        filename = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
-        if filename:
-            with open(filename, 'r') as f:
-                data = json.load(f)
-            self.grid = np.array(data['grid'])
-            self.bbox = data['bbox']
-            self.visualize_grid()
-
-    def visualize_grid(self):
-        if self.grid is None:
-            return
-
+    def update_plot(self):
         self.ax.clear()
-        colors = {
-            'wall': 'gray',
-            'door': 'brown',
-            'stair': 'red',
-            'slab': 'blue',
-            'other': 'green'
-        }
+        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        color_map = ListedColormap(colors)
 
-        for element_type, color in colors.items():
-            x, y, z = np.where(self.grid == element_type)
-            self.ax.scatter(x, y, z, c=color, marker='s', alpha=0.1, label=element_type)
+        grid = self.grid_to_numeric(self.grids[self.current_floor])
+        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
         if self.start:
-            self.ax.scatter(*self.start, c='yellow', s=100, label='Start')
-        if self.end:
-            self.ax.scatter(*self.end, c='purple', s=100, label='End')
-        if self.path:
-            path_array = np.array(self.path)
-            self.ax.plot(path_array[:, 0], path_array[:, 1], path_array[:, 2], c='cyan', linewidth=2, label='Path')
+            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
+        if self.goal:
+            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
 
-        self.ax.set_xlabel('X')
-        self.ax.set_ylabel('Y')
-        self.ax.set_zlabel('Z')
-        self.ax.legend()
+        self.ax.set_title(f'Floor {self.current_floor + 1}')
+        self.ax.axis('off')
+        plt.draw()
 
-        self.canvas.draw()
+    def prev_floor(self, event):
+        if self.current_floor > 0:
+            self.current_floor -= 1
+            self.update_plot()
 
-    def find_path(self):
-        if self.grid is None:
-            print("Please load a grid first")
+    def next_floor(self, event):
+        if self.current_floor < len(self.grids) - 1:
+            self.current_floor += 1
+            self.update_plot()
+
+    def set_start_mode(self, event):
+        self.mode = 'start'
+
+    def set_goal_mode(self, event):
+        self.mode = 'goal'
+
+    def on_click(self, event):
+        if event.inaxes != self.ax:
+            return
+        x, y = int(event.xdata), int(event.ydata)
+        if self.mode == 'start':
+            self.start = (x, y, self.current_floor)
+            print(f"Start set to: {self.start}")
+        elif self.mode == 'goal':
+            self.goal = (x, y, self.current_floor)
+            print(f"Goal set to: {self.goal}")
+        self.mode = None
+        self.update_plot()
+
+    def heuristic(self, a, b):
+        return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) * self.grid_size
+
+    def get_neighbors(self, current):
+        x, y, z = current.position
+        neighbors = []
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < self.grids[z].shape[0] and 0 <= ny < self.grids[z].shape[1]:
+                if self.grids[z][nx, ny] != 'wall':
+                    neighbors.append(Node((nx, ny, z)))
+
+        if self.grids[z][x, y] == 'stair':
+            for nz in range(len(self.grids)):
+                if nz != z and self.grids[nz][x, y] == 'stair':
+                    neighbors.append(Node((x, y, nz)))
+
+        return neighbors
+
+    def run_astar(self, event):
+        if not self.start or not self.goal:
+            print("Please set both start and goal points.")
             return
 
-        try:
-            start = tuple(map(int, self.start_entry.get().split(',')))
-            end = tuple(map(int, self.end_entry.get().split(',')))
+        open_list = []
+        closed_set = set()
+        start_node = Node(self.start)
+        goal_node = Node(self.goal)
 
-            if len(start) != 3 or len(end) != 3:
-                raise ValueError("Start and End must be 3D coordinates")
+        heapq.heappush(open_list, (start_node.f, start_node))
 
-            self.start = start
-            self.end = end
+        while open_list:
+            current_node = heapq.heappop(open_list)[1]
 
-            self.path = a_star(self.grid, start, end)
-            if self.path:
-                print("Path found:", self.path)
-            else:
-                print("No path found")
+            if current_node.position == goal_node.position:
+                path = []
+                while current_node:
+                    path.append(current_node.position)
+                    current_node = current_node.parent
+                self.visualize_path(path[::-1])
+                return
 
-            self.visualize_grid()
-        except ValueError as e:
-            print(f"Error: {e}")
+            closed_set.add(current_node.position)
+
+            for neighbor in self.get_neighbors(current_node):
+                if neighbor.position in closed_set:
+                    continue
+
+                neighbor.g = current_node.g + self.grid_size
+                if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
+                    neighbor.g += 5 * self.grid_size  # Higher cost for doors
+                elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
+                    neighbor.g += 2 * self.grid_size  # Moderate cost for stairs
+
+                neighbor.h = self.heuristic(neighbor.position, goal_node.position)
+                neighbor.f = neighbor.g + neighbor.h
+                neighbor.parent = current_node
+
+                if not any(node.position == neighbor.position for _, node in open_list):
+                    heapq.heappush(open_list, (neighbor.f, neighbor))
+                else:
+                    # Update existing node if this path is better
+                    for i, (f, node) in enumerate(open_list):
+                        if node.position == neighbor.position and neighbor.g < node.g:
+                            open_list[i] = (neighbor.f, neighbor)
+                            heapq.heapify(open_list)
+                            break
+
+            self.visualize_progress(closed_set, [node for _, node in open_list])
+
+        print("No path found.")
+
+    def visualize_progress(self, closed_set, open_list):
+        self.ax.clear()
+        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        color_map = ListedColormap(colors)
+
+        grid = self.grid_to_numeric(self.grids[self.current_floor])
+        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
+
+        # Plot closed set
+        closed_on_floor = [node for node in closed_set if node[2] == self.current_floor]
+        if closed_on_floor:
+            closed_x, closed_y = zip(*[(node[0], node[1]) for node in closed_on_floor])
+            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.5, s=50)
+
+        # Plot open list
+        open_on_floor = [node.position for node in open_list if node.position[2] == self.current_floor]
+        if open_on_floor:
+            open_x, open_y = zip(*[(node[0], node[1]) for node in open_on_floor])
+            self.ax.scatter(open_x, open_y, color='cyan', alpha=0.5, s=50)
+
+        # Plot start and goal
+        if self.start:
+            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
+        if self.goal:
+            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+
+        self.ax.set_title(f'Floor {self.current_floor + 1}')
+        self.ax.axis('off')
+        plt.draw()
+        plt.pause(0.1)
+
+    def visualize_path(self, path):
+        self.ax.clear()
+        colors = ['white', 'gray', 'brown', 'red', 'beige']
+        color_map = ListedColormap(colors)
+
+        grid = self.grid_to_numeric(self.grids[self.current_floor])
+        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
+
+        path_on_floor = [node for node in path if node[2] == self.current_floor]
+        if path_on_floor:
+            path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+            self.ax.plot(path_x, path_y, color='blue', linewidth=2)
+
+        if self.start:
+            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
+        if self.goal:
+            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+
+        self.ax.set_title(f'Floor {self.current_floor + 1}')
+        self.ax.axis('off')
+        plt.draw()
 
 
 def main():
-    root = tk.Tk()
-    root.title("BIM Pathfinder")
-    app = BIMPathfinder(root)
-    root.mainloop()
+    pathfinder = InteractiveBIMPathfinder('bim_grids.json')
+    plt.show()
+
 
 if __name__ == "__main__":
     main()
