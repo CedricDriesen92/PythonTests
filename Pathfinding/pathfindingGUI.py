@@ -32,6 +32,7 @@ class InteractiveBIMPathfinder:
         self.grids, self.bbox, self.floors, self.grid_size = self.load_grid_data(filename)
         self.start = None
         self.goal = None
+        self.grid_stairs = []
         self.current_floor = 0
         self.speed = 1  # Default speed
         self.fig, self.ax = plt.subplots(figsize=(12, 9))
@@ -85,7 +86,7 @@ class InteractiveBIMPathfinder:
         self.b_next.on_clicked(self.next_floor)
         self.b_start.on_clicked(self.set_start_mode)
         self.b_goal.on_clicked(self.set_goal_mode)
-        self.b_run.on_clicked(self.run_astar)
+        self.b_run.on_clicked(self.run_algorithm)
         self.s_speed.on_changed(self.update_speed)
         self.radio_minimize.on_clicked(self.set_minimize)
         self.radio_animate.on_clicked(self.set_animate)
@@ -233,24 +234,43 @@ class InteractiveBIMPathfinder:
         self.mode = None
         self.update_plot()
 
-    def find_nearest_stairs(self, position):
+    def find_all_stairs(self):
+        grid_stairs = []
+        #print(self.grids)
+        for z in range(len(self.grids)):
+            for i in range(self.grids[z].shape[0]):
+                for j in range(self.grids[z].shape[1]):
+                    #print(str(z), " ", str(i), " ", str(j))
+                    if self.grids[z][i, j] == 'stair':
+                        grid_stairs.append([z, i, j])
+        self.grid_stairs = grid_stairs
+
+    @profile
+    def find_nearest_stairs(self, position, goal_position):
+        if not self.grid_stairs:
+            self.find_all_stairs()
         x, y, z = position
+        xg, yx, zg = goal_position
         min_distance = float('inf')
         nearest_stairs = None
-        for i in range(self.grids[z].shape[0]):
-            for j in range(self.grids[z].shape[1]):
-                if self.grids[z][i, j] == 'stair':
-                    distance = np.sqrt((x - i) ** 2 + (y - j) ** 2)
-                    if distance < min_distance:
-                        min_distance = distance
-                        nearest_stairs = (i, j, z)
+        for stair in self.grid_stairs:
+            #print(stair)
+            z2 = stair[0]
+            i = stair[1]
+            j = stair[2]
+            if z == z2 and self.grids[zg][i,j] == 'stair' and self.grids[z][i, j] == 'stair':
+                distance = np.sqrt((x - i) ** 2 + (y - j) ** 2)
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_stairs = (i, j, z)
         return nearest_stairs
 
+    @profile
     def heuristic(self, a, b):
         if a[2] == b[2]:  # Same floor
             return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) * self.grid_size
         else:  # Different floors
-            nearest_stairs = self.find_nearest_stairs(a)
+            nearest_stairs = self.find_nearest_stairs(a, b)
             if nearest_stairs:
                 # Distance to nearest stairs + estimated distance from stairs to goal
                 return (np.sqrt((nearest_stairs[0] - a[0]) ** 2 + (nearest_stairs[1] - a[1]) ** 2) +
@@ -288,14 +308,17 @@ class InteractiveBIMPathfinder:
             return self.heuristic(current.position, neighbor.position)
 
     def run_algorithm(self, event):
+        if not self.grid_stairs:
+            self.find_all_stairs()
         if not self.start or not self.goal:
             print("Please set both start and goal points.")
             return
         if self.algorithm == 'A*':
             self.run_astar()
 
-    def run_astar(self, event):
-        fps = 1
+    @profile
+    def run_astar(self):
+        fps = self.fps
         time0 = timer()
         self.path = None
         open_list = []
@@ -343,7 +366,8 @@ class InteractiveBIMPathfinder:
             if progress_threshold == 0 or progress_counter >= progress_threshold:
                 if timer() - time0 > 1.0 / fps and self.animated:
                     time0 = timer()
-                    self.visualize_progress(closed_set, [node for _, node in open_list], self.get_current_path(current_node))
+                    self.visualize_progress(closed_set, [node for _, node in open_list],
+                                            self.get_current_path(current_node))
                     progress_counter = 0
 
         print("No path found.")
@@ -359,7 +383,6 @@ class InteractiveBIMPathfinder:
         self.path = path[::-1]
         self.t_pathlength.set_val(f"{path_length:.2f}")
         self.visualize_path()
-
 
     @profile
     def visualize_progress(self, closed_set, open_list, current_path):
