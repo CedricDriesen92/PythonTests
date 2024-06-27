@@ -31,8 +31,8 @@ class InteractiveBIMPathfinder:
     def __init__(self, filename):
         self.grids, self.bbox, self.floors, self.grid_size = self.load_grid_data(filename)
         self.start = None
-        self.goal = None
-        self.grid_stairs = []
+        self.goals = []
+        self.grid_stairs = None
         self.current_floor = 0
         self.speed = 1  # Default speed
         self.fig, self.ax = plt.subplots(figsize=(12, 9))
@@ -40,12 +40,17 @@ class InteractiveBIMPathfinder:
         self.toolbar = NavigationToolbar2Tk(self.canvas, self.fig.canvas.get_tk_widget().master)
         self.toolbar.update()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+        self.dragging = None
+        self.fig.canvas.mpl_connect('button_press_event', self.on_press)
+        self.fig.canvas.mpl_connect('button_release_event', self.on_release)
+        self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
         self.path = None
         self.minimize_cost = True
         self.algorithm = 'A*'
         self.animated = True
         self.fps = 1
+        self.heuristic_style = 'sum'
         self.show_heuristic = False
         self.heuristic_resolution = 20
         self.setup_plot()
@@ -97,9 +102,54 @@ class InteractiveBIMPathfinder:
         self.b_heuristic.on_clicked(self.toggle_heuristic)
 
         self.mode = None
-        self.fig.canvas.mpl_connect('button_press_event', self.on_click)
+        #self.fig.canvas.mpl_connect('button_press_event', self.on_click)
 
         self.update_plot()
+
+    def on_press(self, event):
+        if event.inaxes != self.ax:
+            return
+        x, y = int(event.xdata), int(event.ydata)
+
+        # Check if clicking on start point
+        if self.start and abs(x - self.start[0]) <= 1 and abs(y - self.start[1]) <= 1 and self.current_floor == \
+                self.start[2]:
+            self.dragging = 'start'
+            return
+
+        # Check if clicking on a goal point
+        for i, goal in enumerate(self.goals):
+            if abs(x - goal[0]) <= 1 and abs(y - goal[1]) <= 1 and self.current_floor == goal[2]:
+                if event.button == 1:  # Left click to drag
+                    self.dragging = ('goal', i)
+                elif event.button == 3:  # Right click to delete
+                    self.goals.pop(i)
+                    self.update_plot()
+                return
+
+        # If not clicking on existing points, add new start/goal
+        if self.mode == 'start':
+            self.start = (x, y, self.current_floor)
+            print(f"Start set to: {self.start}")
+        elif self.mode == 'goal':
+            new_goal = (x, y, self.current_floor)
+            self.goals.append(new_goal)
+            print(f"Goal added: {new_goal}")
+        self.mode = None
+        self.update_plot()
+
+    def on_release(self, event):
+        self.dragging = None
+
+    def on_motion(self, event):
+        if self.dragging and event.inaxes == self.ax:
+            x, y = int(event.xdata), int(event.ydata)
+            if self.dragging == 'start':
+                self.start = (x, y, self.current_floor)
+            elif self.dragging[0] == 'goal':
+                i = self.dragging[1]
+                self.goals[i] = (x, y, self.current_floor)
+            self.update_plot()
 
     def set_algorithm(self, label):
         self.algorithm = label
@@ -127,21 +177,8 @@ class InteractiveBIMPathfinder:
         self.show_heuristic = not self.show_heuristic
         self.update_plot()
 
-    def calculate_floor_heuristic(self):
-        if self.goal is None:
-            return None
-
-        heuristic_map = np.zeros(self.grids[self.current_floor].shape)
-        for x in range(self.grids[self.current_floor].shape[0]):
-            for y in range(self.grids[self.current_floor].shape[1]):
-                if self.grids[self.current_floor][x, y] != 'wall':
-                    heuristic_map[x, y] = self.heuristic((x, y, self.current_floor), self.goal)
-                else:
-                    heuristic_map[x, y] = np.nan  # Use NaN for walls to exclude them from the heatmap
-        return heuristic_map
-
     def calculate_sparse_heuristic(self):
-        if self.goal is None:
+        if self.goals is None:
             return None
 
         floor_shape = self.grids[self.current_floor].shape
@@ -155,7 +192,7 @@ class InteractiveBIMPathfinder:
                 x_coord = int(xx[i, j])
                 y_coord = int(yy[i, j])
                 if self.grids[self.current_floor][x_coord, y_coord] != 'wall':
-                    h_value = self.heuristic((x_coord, y_coord, self.current_floor), self.goal)
+                    h_value = self.heuristic((x_coord, y_coord, self.current_floor), self.goals)
                     heuristic_values.append((x_coord, y_coord, h_value))
 
         if not heuristic_values:
@@ -182,18 +219,19 @@ class InteractiveBIMPathfinder:
         grid = self.grid_to_numeric(self.grids[self.current_floor])
         self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
-        if self.show_heuristic and self.goal:
+        if self.show_heuristic and self.goals:
             heuristic_map = self.calculate_sparse_heuristic()
             if heuristic_map is not None:
                 heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
                 self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
-                #plt.colorbar(heatmap, ax=self.ax)
-                #self.ax.axis('off')
 
         if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal and self.goal[2] == self.current_floor:
-            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+
+        for i, goal in enumerate(self.goals):
+            if goal[2] == self.current_floor:
+                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
+                self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
 
         if self.path:
             self.visualize_path()
@@ -202,7 +240,6 @@ class InteractiveBIMPathfinder:
         self.ax.set_ylim(self.ax.get_ylim())
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
-        #self.ax.get_legend().remove()
         plt.draw()
 
     def prev_floor(self, event):
@@ -221,19 +258,6 @@ class InteractiveBIMPathfinder:
     def set_goal_mode(self, event):
         self.mode = 'goal'
 
-    def on_click(self, event):
-        if event.inaxes != self.ax:
-            return
-        x, y = int(event.xdata), int(event.ydata)
-        if self.mode == 'start':
-            self.start = (x, y, self.current_floor)
-            print(f"Start set to: {self.start}")
-        elif self.mode == 'goal':
-            self.goal = (x, y, self.current_floor)
-            print(f"Goal set to: {self.goal}")
-        self.mode = None
-        self.update_plot()
-
     def find_all_stairs(self):
         grid_stairs = []
         #print(self.grids)
@@ -246,16 +270,17 @@ class InteractiveBIMPathfinder:
         self.grid_stairs = grid_stairs
 
     @profile
-    def find_nearest_stairs(self, position, goal_position):
+    def find_nearest_stairs(self, position, goal_position): #find nearest stairs leading to the goal floor
         if not self.grid_stairs:
             self.find_all_stairs()
         x, y, z = position
+        #print("z: " + str(z))
         xg, yx, zg = goal_position
         min_distance = float('inf')
         nearest_stairs = None
         for stair in self.grid_stairs:
-            #print(stair)
             z2 = stair[0]
+            #print("z2: " + str(z2))
             i = stair[1]
             j = stair[2]
             if z == z2 and self.grids[zg][i,j] == 'stair' and self.grids[z][i, j] == 'stair':
@@ -266,19 +291,31 @@ class InteractiveBIMPathfinder:
         return nearest_stairs
 
     @profile
-    def heuristic(self, a, b):
-        if a[2] == b[2]:  # Same floor
-            return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) * self.grid_size
-        else:  # Different floors
-            nearest_stairs = self.find_nearest_stairs(a, b)
-            if nearest_stairs:
-                # Distance to nearest stairs + estimated distance from stairs to goal
-                return (np.sqrt((nearest_stairs[0] - a[0]) ** 2 + (nearest_stairs[1] - a[1]) ** 2) +
-                        np.sqrt((b[0] - nearest_stairs[0]) ** 2 + (b[1] - nearest_stairs[1]) ** 2) +
-                        abs(b[2] - a[2]) * 5) * self.grid_size  # Add floor change penalty
-            else:
-                # If no stairs found, use a large heuristic to avoid this path
-                return float('inf')
+    def heuristic(self, a, position_b):
+        if not self.goals:
+            return 0  # Return 0 if there are no goals
+        # Calculate heuristic for each goal
+        goal_heuristics = []
+        for b in self.goals:
+            if a[2] == b[2]:  # Same floor
+                h = np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) * self.grid_size
+            else:  # Different floors
+                nearest_stairs = self.find_nearest_stairs(a, b)
+                if nearest_stairs:
+                    # Distance to nearest stairs + estimated distance from stairs to goal
+                    h = (np.sqrt((nearest_stairs[0] - a[0]) ** 2 + (nearest_stairs[1] - a[1]) ** 2) +
+                         np.sqrt((b[0] - nearest_stairs[0]) ** 2 + (b[1] - nearest_stairs[1]) ** 2) +
+                         abs(b[2] - a[2]) * 1) * self.grid_size  # Add floor change penalty
+                else:
+                    # If no stairs found, use a large heuristic to avoid this path
+                    h = float('inf')
+            goal_heuristics.append(h)
+
+        if self.heuristic_style == 'sum':
+            # Return the sum of heuristic values
+            return sum(goal_heuristics)
+        else:
+            return min(goal_heuristics)
 
     def get_neighbors(self, current):
         x, y, z = current.position
@@ -310,8 +347,8 @@ class InteractiveBIMPathfinder:
     def run_algorithm(self, event):
         if not self.grid_stairs:
             self.find_all_stairs()
-        if not self.start or not self.goal:
-            print("Please set both start and goal points.")
+        if not self.start or not self.goals:
+            print("Please set both start and at least one goal point.")
             return
         if self.algorithm == 'A*':
             self.run_astar()
@@ -324,7 +361,8 @@ class InteractiveBIMPathfinder:
         open_list = []
         closed_set = set()
         start_node = Node(self.start)
-        goal_node = Node(self.goal)
+        start_node.h = self.heuristic(self.start, None)  # Calculate initial heuristic
+        start_node.f = start_node.g + start_node.h
 
         heapq.heappush(open_list, (start_node.f, start_node))
 
@@ -334,7 +372,7 @@ class InteractiveBIMPathfinder:
         while open_list:
             current_node = heapq.heappop(open_list)[1]
 
-            if current_node.position == goal_node.position:
+            if current_node.position in self.goals:
                 self.visualize_progress(closed_set, [node for _, node in open_list], None)
                 self.reconstruct_path(current_node)
                 return
@@ -349,7 +387,7 @@ class InteractiveBIMPathfinder:
 
                 if not any(node.position == neighbor.position for _, node in open_list):
                     neighbor.g = tentative_g
-                    neighbor.h = self.heuristic(neighbor.position, goal_node.position)
+                    neighbor.h = self.heuristic(neighbor.position, None)
                     neighbor.f = neighbor.g + neighbor.h
                     neighbor.parent = current_node
                     heapq.heappush(open_list, (neighbor.f, neighbor))
@@ -370,7 +408,7 @@ class InteractiveBIMPathfinder:
                                             self.get_current_path(current_node))
                     progress_counter = 0
 
-        print("No path found.")
+        print("No path found to any goal.")
 
     def reconstruct_path(self, node):
         path = []
@@ -415,8 +453,9 @@ class InteractiveBIMPathfinder:
         # Plot start and goal
         if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal and self.goal[2] == self.current_floor:
-            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+        for goal in self.goals:
+            if goal and goal[2] == self.current_floor:
+                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
 
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
