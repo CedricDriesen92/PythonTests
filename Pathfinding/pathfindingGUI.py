@@ -1,4 +1,5 @@
 import json
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
@@ -49,6 +50,7 @@ class InteractiveBIMPathfinder:
         self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
         self.path = None
+        self.pathlength = None
         self.minimize_cost = True
         self.algorithm = 'A*'
         self.animated = True
@@ -57,9 +59,12 @@ class InteractiveBIMPathfinder:
         self.show_heuristic = False
         self.heuristic_resolution = 10
         self.allow_diagonal = True
+        self.wall_buffer = 0
+        self.buffered_grids = None
         self.background = None
         self.artists = []
         self.setup_plot()
+        self.json_filename = filename
 
     def load_grid_data(self, filename):
         with open(filename, 'r') as f:
@@ -116,9 +121,18 @@ class InteractiveBIMPathfinder:
         self.check_animate = CheckButtons(self.ax_animate, ['Animate'], [self.animated])
         self.check_animate.on_clicked(self.toggle_animation)
 
+        self.ax_identify_exits = plt.axes([0.75, 0.55, 0.2, 0.05])
+        self.b_identify_exits = Button(self.ax_identify_exits, 'Identify Exits')
+        self.b_identify_exits.on_clicked(self.identify_exits)
+
+        self.ax_buffer = plt.axes([0.75, 0.6, 0.2, 0.03])
+        self.s_buffer = Slider(self.ax_buffer, 'Wall Buffer', 0, self.grid_size*10, valinit=0, valstep=self.grid_size)
+        self.s_buffer.on_changed(self.update_buffer)
+
         self.mode = None
         #self.fig.canvas.mpl_connect('button_press_event', self.on_click)
         self.fig.canvas.mpl_connect('draw_event', self.on_draw)
+        self.apply_wall_buffer()
         self.update_plot()
 
     def on_press(self, event):
@@ -211,8 +225,45 @@ class InteractiveBIMPathfinder:
     def update_fps(self, val):
         self.fps = float(val)
 
+    def update_buffer(self, val):
+        self.wall_buffer = val
+        self.apply_wall_buffer()
+        self.background = None
+        self.update_plot()
+
+    def apply_wall_buffer(self):
+        self.buffered_grids = []
+        for floor in self.grids:
+            buffered_floor = floor.copy()
+            #print(floor[0:10, 0:3])
+            wall_mask = (floor == 'wall')
+
+            buffer_distance = int(self.wall_buffer / self.grid_size)
+
+            for _ in range(buffer_distance):
+                wall_mask = self.expand_mask(wall_mask)
+            rows, cols = wall_mask.shape
+            for i in range(rows):
+                for j in range(cols):
+                    if wall_mask[i, j] and floor[i,j] not in ['wall', 'door', 'stair']:
+                        buffered_floor[i,j] = 'walla'
+            self.buffered_grids.append(buffered_floor)
+            #print(buffered_floor[0:10, 0:3])
+
+    def expand_mask(self, mask):
+        expanded = mask.copy()
+        rows, cols = mask.shape
+        for i in range(rows):
+            for j in range(cols):
+                if mask[i, j]:
+                    for di in [-1, 0, 1]:
+                        for dj in [-1, 0, 1]:
+                            if 0 <= i + di < rows and 0 <= j + dj < cols:
+                                expanded[i + di, j + dj] = True
+        return expanded
+
     def grid_to_numeric(self, grid):
-        element_types = ['empty', 'wall', 'door', 'stair', 'floor']
+        element_types = ['empty', 'wall', 'door', 'stair', 'floor', 'walla']
         numeric_grid = np.zeros_like(grid, dtype=int)
         for i, element_type in enumerate(element_types):
             numeric_grid[grid == element_type] = i
@@ -242,13 +293,80 @@ class InteractiveBIMPathfinder:
     def set_goal_mode(self, event):
         self.mode = 'goal'
 
+    def identify_exits(self, event):
+        exits = set()
+        for floor_index, floor in enumerate(self.grids):
+            rows, cols = floor.shape
+            for i in range(rows):
+                for j in range(cols):
+                    if floor[i, j] == 'door':
+                        if self.is_exit(floor, i, j):
+                            exits.add((i, j, floor_index))
+
+        # Filter exits to keep only one per BIM door
+        filtered_exits = self.filter_exits(exits)
+
+        # Add filtered exits as goals
+        for exit in filtered_exits:
+            if exit not in self.goals:
+                self.goals.append(exit)
+
+        self.update_plot()
+
+    def is_exit(self, floor, x, y):
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        rows, cols = floor.shape
+
+        for dx, dy in directions:
+            nx, ny = x + dx, y + dy
+            while 0 <= nx < rows and 0 <= ny < cols:
+                if floor[nx, ny] in ['wall', 'door']:
+                    break
+                if nx == 0 or nx == rows - 1 or ny == 0 or ny == cols - 1:
+                    return True
+                nx, ny = nx + dx, ny + dy
+
+        return False
+
+    def filter_exits(self, exits):
+        filtered = set()
+        for exit in exits:
+            if not any(self.are_connected_by_doors(exit, existing) for existing in filtered):
+                filtered.add(exit)
+        return filtered
+
+    def are_connected_by_doors(self, pos1, pos2):
+        if pos1[2] != pos2[2]:  # Different floors
+            return False
+
+        floor = self.grids[pos1[2]]
+        visited = set()
+        queue = [pos1[:2]]
+
+        while queue:
+            x, y = queue.pop(0)
+            if (x, y) == pos2[:2]:
+                return True
+
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                if (nx, ny) not in visited and floor[nx, ny] == 'door':
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+
+        return False
+
     def update_plot(self):
         if self.background is None:
             self.ax.clear()
-            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-            color_map = ListedColormap(colors)
-
-            grid = self.grid_to_numeric(self.grids[self.current_floor])
+            if self.wall_buffer > 0:
+                colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
+                color_map = ListedColormap(colors)
+                grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
+            else:
+                colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
+                color_map = ListedColormap(colors)
+                grid = self.grid_to_numeric(self.grids[self.current_floor])
 
             self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
@@ -269,9 +387,17 @@ class InteractiveBIMPathfinder:
 
             if self.path:
                 path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-                if path_on_floor:
-                    path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-                    path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
+                for i in range(len(path_on_floor) - 1):
+                    start = path_on_floor[i]
+                    end = path_on_floor[i + 1]
+
+                    # Check if this segment is continuous or a jump
+                    if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
+                        # Discontinuous segment - draw in green
+                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
+                    else:
+                        # Continuous segment - draw in blue
+                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
 
             self.ax.set_title(f'Floor {self.current_floor + 1}')
             self.ax.axis('off')
@@ -284,30 +410,6 @@ class InteractiveBIMPathfinder:
         for artist in self.artists:
             artist.remove()
         self.artists.clear()
-        #
-        # # Update only dynamic elements
-        # if self.start and self.start[2] == self.current_floor:
-        #     start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
-        #     self.artists.append(start_point)
-        #
-        # for i, goal in enumerate(self.goals):
-        #     if goal[2] == self.current_floor:
-        #         goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-        #         self.artists.append(goal_point)
-        #         text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
-        #         self.artists.append(text)
-
-        #if self.path:
-        #    path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-        #    if path_on_floor:
-        #        path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-        #        path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
-        #        self.artists.append(path_line)
-
-        # Update legend
-        #legend = self.ax.legend(loc='upper right')
-        #if legend:
-            #self.artists.append(legend)
 
     def find_all_stairs(self):
         grid_stairs = []
@@ -362,12 +464,16 @@ class InteractiveBIMPathfinder:
                         h += (np.sqrt((nearest_stairs[0] - a[0]) ** 2 + (nearest_stairs[1] - a[1]) ** 2) +
                               np.sqrt(
                                   (b[0] - nearest_stairs[0]) ** 2 + (b[1] - nearest_stairs[1]) ** 2)) * self.grid_size
-                        h += dz * 5 * self.grid_size  # Increased floor change penalty
+                        h += dz * 3 * self.grid_size  # Increased floor change penalty
                     else:
                         h = float('inf')
+                if self.buffered_grids[a[2]][a[0], a[1]] == 'walla':
+                    h += 10 * self.grid_size  # Add a cost for wall-adjacent cells
             else:
                 # For distance minimization, use 3D Euclidean distance
                 h = np.sqrt(dx ** 2 + dy ** 2 + (dz * 3) ** 2) * self.grid_size
+                if self.buffered_grids[a[2]][a[0], a[1]] == 'walla':
+                    h += 10 * self.grid_size  # Add a cost for wall-adjacent cells even in distance mode
 
             goal_heuristics.append(h)
 
@@ -419,13 +525,13 @@ class InteractiveBIMPathfinder:
 
         for dx, dy in directions:
             nx, ny = x + dx, y + dy
-            if 0 <= nx < self.grids[z].shape[0] and 0 <= ny < self.grids[z].shape[1]:
-                if self.grids[z][nx, ny] != 'wall':
+            if 0 <= nx < self.buffered_grids[z].shape[0] and 0 <= ny < self.buffered_grids[z].shape[1]:
+                if self.buffered_grids[z][nx, ny] not in ['wall', 'walla']:
                     neighbors.append(Node((nx, ny, z)))
 
-        if self.grids[z][x, y] == 'stair':
-            for nz in range(len(self.grids)):
-                if nz != z and self.grids[nz][x, y] == 'stair':
+        if self.buffered_grids[z][x, y] == 'stair':
+            for nz in range(len(self.buffered_grids)):
+                if nz != z and self.buffered_grids[nz][x, y] == 'stair':
                     neighbors.append(Node((x, y, nz)))
 
         return neighbors
@@ -437,10 +543,12 @@ class InteractiveBIMPathfinder:
 
         if self.minimize_cost:
             cost = self.grid_size
-            if self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
+            if self.buffered_grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'door':
                 cost += 5 * self.grid_size
-            elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
+            elif self.buffered_grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
                 cost += 1.25 * self.grid_size
+            elif self.buffered_grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'walla':
+                cost += 10 * self.grid_size  # Add a cost for wall-adjacent cells
 
             if self.allow_diagonal and dx + dy == 2:
                 cost *= 1.414  # Diagonal movement cost
@@ -449,6 +557,8 @@ class InteractiveBIMPathfinder:
             cost = np.sqrt(dx ** 2 + dy ** 2) * self.grid_size
             if dz > 0:
                 cost += 3 * self.grid_size  # Significant penalty for changing floors
+            if self.buffered_grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'walla':
+                cost += 10 * self.grid_size  # Add a cost for wall-adjacent cells even in distance mode
 
         return cost
 
@@ -483,6 +593,7 @@ class InteractiveBIMPathfinder:
             if current_node.position in self.goals:
                 self.visualize_progress(closed_set, [node for _, node in open_list], None)
                 self.reconstruct_path(current_node)
+                self.save_path_visualization()
                 return
 
             closed_set.add(current_node.position)
@@ -528,15 +639,21 @@ class InteractiveBIMPathfinder:
             node = node.parent
         self.path = path[::-1]
         self.t_pathlength.set_val(f"{path_length:.2f}")
+        self.pathlength = path_length
         self.visualize_path()
 
     @profile
     def visualize_progress(self, closed_set, open_list, current_path):
         self.ax.clear()
-        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-        color_map = ListedColormap(colors)
+        if self.wall_buffer > 0:
+            colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
+            color_map = ListedColormap(colors)
+            grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
+        else:
+            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
+            color_map = ListedColormap(colors)
+            grid = self.grid_to_numeric(self.grids[self.current_floor])
 
-        grid = self.grid_to_numeric(self.grids[self.current_floor])
         self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
         # Plot closed set
@@ -555,8 +672,17 @@ class InteractiveBIMPathfinder:
         if current_path:
             current_path_on_floor = [node for node in current_path if node[2] == self.current_floor]
             if len(current_path_on_floor) > 1:
-                path_x, path_y = zip(*[(node[0], node[1]) for node in current_path_on_floor])
-                self.ax.plot(path_x, path_y, color='yellow', linewidth=2)
+                for i in range(len(current_path_on_floor) - 1):
+                    start = current_path_on_floor[i]
+                    end = current_path_on_floor[i + 1]
+
+                    # Check if this segment is continuous or a jump
+                    if abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1:
+                        # Discontinuous segment - draw in green
+                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
+                    else:
+                        # Continuous segment - draw in blue
+                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
 
         # Plot start and goal
         if self.start and self.start[2] == self.current_floor:
@@ -572,10 +698,16 @@ class InteractiveBIMPathfinder:
 
     def visualize_path(self):
         self.ax.clear()
-        colors = ['white', 'gray', 'brown', 'red', 'beige']
-        color_map = ListedColormap(colors)
 
-        grid = self.grid_to_numeric(self.grids[self.current_floor])
+        if self.wall_buffer > 0:
+            colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
+            color_map = ListedColormap(colors)
+            grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
+        else:
+            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
+            color_map = ListedColormap(colors)
+            grid = self.grid_to_numeric(self.grids[self.current_floor])
+
         self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
         if self.path:
@@ -602,6 +734,67 @@ class InteractiveBIMPathfinder:
         self.ax.axis('off')
         plt.draw()
         plt.pause(0.001)
+
+    import os
+    import matplotlib.pyplot as plt
+
+    def save_path_visualization(self):
+        if not self.path:
+            print("No path to visualize.")
+            return
+
+        # Determine which floors are part of the path
+        floors_in_path = sorted(set(node[2] for node in self.path), reverse=True)
+
+        # Create a new figure with subplots for each floor in the path
+        fig, axes = plt.subplots(len(floors_in_path), 1, figsize=(12, 9 * len(floors_in_path)))
+        if len(floors_in_path) == 1:
+            axes = [axes]
+
+        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
+        color_map = ListedColormap(colors)
+
+        for ax, floor_index in zip(axes, floors_in_path):
+            grid = self.grid_to_numeric(self.grids[floor_index])
+            ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
+
+            if self.start and self.start[2] == floor_index:
+                ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
+
+            for i, goal in enumerate(self.goals):
+                if goal[2] == floor_index:
+                    ax.plot(goal[0], goal[1], 'ro', markersize=10)
+                    ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
+
+            path_on_floor = [node for node in self.path if node[2] == floor_index]
+            if path_on_floor:
+                for i in range(len(path_on_floor) - 1):
+                    start = path_on_floor[i]
+                    end = path_on_floor[i + 1]
+
+                    # Check if this segment is continuous or a jump
+                    if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
+                        # Discontinuous segment - draw in green
+                        ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
+                    else:
+                        # Continuous segment - draw in blue
+                        ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
+
+            ax.set_title(f'Floor {floor_index + 1}')
+            ax.axis('off')
+
+        plt.tight_layout()
+
+        # Create subfolder with the same name as the JSON import (without extension)
+        folder_name = os.path.splitext(os.path.basename(self.json_filename))[0]
+        os.makedirs(folder_name, exist_ok=True)
+
+        # Save the figure
+        plt.savefig(os.path.join(folder_name, f"path_visualization_len_{str(int(self.pathlength))}.png"),
+                    bbox_inches='tight', pad_inches=0.1)
+        plt.close(fig)
+
+        print(f"Path visualization saved in {folder_name}/path_visualization_len_{str(int(self.pathlength))}.png")
 
     def get_current_path(self, node):
         path = []

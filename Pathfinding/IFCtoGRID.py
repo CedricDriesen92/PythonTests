@@ -58,7 +58,7 @@ def calculate_bounding_box_and_floors(ifc_file):
     floor_elevations = sorted(list(floor_elevations))
     floors = [{'elevation': e, 'height': next_e - e}
               for e, next_e in zip(floor_elevations, floor_elevations[1:] + [bbox['max_z']])
-              if next_e - e >= 1.5]  # Only include floors taller than 1.5m
+              if 1.5 <= next_e - e < 1000]  # Only include floors taller than 1.5m
 
     if not floors:
         print("Warning: No valid floors found. Creating a single floor based on bounding box.")
@@ -71,8 +71,8 @@ def create_faux_3d_grid(bbox, floors, grid_size=0.2):
     x_size = bbox['max_x'] - bbox['min_x']
     y_size = bbox['max_y'] - bbox['min_y']
 
-    x_cells = int(np.ceil(x_size / grid_size)) + 2  # +2 for one extra on each side
-    y_cells = int(np.ceil(y_size / grid_size)) + 2  # +2 for one extra on each side
+    x_cells = int(np.ceil(x_size / grid_size)) + 10  # +2 for one extra on each side
+    y_cells = int(np.ceil(y_size / grid_size)) + 10  # +2 for one extra on each side
 
     return [np.full((x_cells, y_cells), 'empty', dtype=object) for _ in floors]
 
