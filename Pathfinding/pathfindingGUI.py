@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import heapq
-from matplotlib.widgets import Button, Slider, TextBox, RadioButtons
+from matplotlib.widgets import Button, Slider, TextBox, RadioButtons, CheckButtons
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
 from scipy.interpolate import griddata
@@ -13,6 +13,8 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 import line_profiler_pycharm
 from line_profiler_pycharm import profile
 from timeit import default_timer as timer
+import warnings
+warnings.filterwarnings("ignore")
 
 
 class Node:
@@ -49,11 +51,15 @@ class InteractiveBIMPathfinder:
         self.minimize_cost = True
         self.algorithm = 'A*'
         self.animated = True
-        self.fps = 1
-        self.heuristic_style = 'sum'
+        self.fps = 5
+        self.heuristic_style = 'Min'
         self.show_heuristic = False
-        self.heuristic_resolution = 20
+        self.heuristic_resolution = 10
+        self.allow_diagonal = True
+        self.background = None
+        self.artists = []
         self.setup_plot()
+
 
     def load_grid_data(self, filename):
         with open(filename, 'r') as f:
@@ -101,9 +107,17 @@ class InteractiveBIMPathfinder:
         self.b_heuristic = Button(self.ax_heuristic, 'Toggle Heuristic')
         self.b_heuristic.on_clicked(self.toggle_heuristic)
 
+        self.ax_heuristic_style = plt.axes([0.75, 0.55, 0.2, 0.1])
+        self.radio_heuristic_style = RadioButtons(self.ax_heuristic_style, ('Min', 'Sum'))
+        self.radio_heuristic_style.on_clicked(self.set_heuristic_style)
+
+        self.ax_diagonal = plt.axes([0.75, 0.45, 0.2, 0.05])
+        self.check_diagonal = CheckButtons(self.ax_diagonal, ['Allow Diagonal'], [self.allow_diagonal])
+        self.check_diagonal.on_clicked(self.toggle_diagonal)
+
         self.mode = None
         #self.fig.canvas.mpl_connect('button_press_event', self.on_click)
-
+        self.fig.canvas.mpl_connect('draw_event', self.on_draw)
         self.update_plot()
 
     def on_press(self, event):
@@ -151,6 +165,24 @@ class InteractiveBIMPathfinder:
                 self.goals[i] = (x, y, self.current_floor)
             self.update_plot()
 
+    def on_draw(self, event):
+        self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
+        self.draw_animated_artists()
+
+    def draw_animated_artists(self):
+        for artist in self.artists:
+            try:
+                if isinstance(artist, plt.Text):
+                    # For Text artists, check if axes are valid
+                    if artist.axes is not None and artist.axes.transData is not None:
+                        self.ax.draw_artist(artist)
+                else:
+                    self.ax.draw_artist(artist)
+            except AttributeError:
+                # Ignore AttributeError, which might occur if axes are not ready
+                pass
+        self.fig.canvas.blit(self.ax.bbox)
+
     def set_algorithm(self, label):
         self.algorithm = label
 
@@ -159,6 +191,15 @@ class InteractiveBIMPathfinder:
 
     def set_animate(self, label):
         self.animated = (label == 'Yes')
+
+    def set_heuristic_style(self, label):
+        self.heuristic_style = label.lower()
+        if self.show_heuristic:
+            self.calculate_sparse_heuristic()
+            self.update_plot()
+
+    def toggle_diagonal(self, label):
+        self.allow_diagonal = not self.allow_diagonal
 
     def update_speed(self, val):
         self.speed = int(val)
@@ -212,35 +253,58 @@ class InteractiveBIMPathfinder:
         return heuristic_map
 
     def update_plot(self):
-        self.ax.clear()
-        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-        color_map = ListedColormap(colors)
+        if self.background is None:
+            self.ax.clear()
+            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
+            color_map = ListedColormap(colors)
 
-        grid = self.grid_to_numeric(self.grids[self.current_floor])
-        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
+            grid = self.grid_to_numeric(self.grids[self.current_floor])
 
-        if self.show_heuristic and self.goals:
-            heuristic_map = self.calculate_sparse_heuristic()
-            if heuristic_map is not None:
-                heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
-                self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
+            self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
 
+            if self.show_heuristic and self.goals:
+                heuristic_map = self.calculate_sparse_heuristic()
+                if heuristic_map is not None:
+                    heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
+                    self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
+
+            self.ax.set_title(f'Floor {self.current_floor + 1}')
+            self.ax.axis('off')
+
+            self.fig.canvas.draw()
+            self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
+        else:
+            self.fig.canvas.restore_region(self.background)
+
+        for artist in self.artists:
+            artist.remove()
+        self.artists.clear()
+
+        # Update only dynamic elements
         if self.start and self.start[2] == self.current_floor:
-            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
+            start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
+            self.artists.append(start_point)
 
         for i, goal in enumerate(self.goals):
             if goal[2] == self.current_floor:
-                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-                self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
+                goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
+                self.artists.append(goal_point)
+                text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
+                self.artists.append(text)
 
         if self.path:
-            self.visualize_path()
+            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+            if path_on_floor:
+                path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+                path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
+                self.artists.append(path_line)
 
-        self.ax.set_xlim(self.ax.get_xlim())
-        self.ax.set_ylim(self.ax.get_ylim())
-        self.ax.set_title(f'Floor {self.current_floor + 1}')
-        self.ax.axis('off')
-        plt.draw()
+        # Update legend
+        legend = self.ax.legend(loc='upper right')
+        if legend:
+            self.artists.append(legend)
+
+        self.draw_animated_artists()
 
     def prev_floor(self, event):
         if self.current_floor > 0:
@@ -311,7 +375,7 @@ class InteractiveBIMPathfinder:
                     h = float('inf')
             goal_heuristics.append(h)
 
-        if self.heuristic_style == 'sum':
+        if self.heuristic_style == 'Sum':
             # Return the sum of heuristic values
             return sum(goal_heuristics)
         else:
@@ -320,7 +384,11 @@ class InteractiveBIMPathfinder:
     def get_neighbors(self, current):
         x, y, z = current.position
         neighbors = []
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        if self.allow_diagonal:
+            directions += [(1, 1), (1, -1), (-1, 1), (-1, -1)]
+
+        for dx, dy in directions:
             nx, ny = x + dx, y + dy
             if 0 <= nx < self.grids[z].shape[0] and 0 <= ny < self.grids[z].shape[1]:
                 if self.grids[z][nx, ny] != 'wall':
@@ -340,6 +408,9 @@ class InteractiveBIMPathfinder:
                 cost += 5 * self.grid_size
             elif self.grids[neighbor.position[2]][neighbor.position[0], neighbor.position[1]] == 'stair':
                 cost += 1.25 * self.grid_size
+
+            if self.allow_diagonal and abs(neighbor.position[0] - current.position[0]) + abs(neighbor.position[1] - current.position[1]) == 2:
+                cost *= 1.414  # Diagonal movement cost
             return cost
         else:
             return self.heuristic(current.position, neighbor.position)
@@ -486,8 +557,9 @@ class InteractiveBIMPathfinder:
 
         if self.start and self.start[2] == self.current_floor:
             self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        if self.goal and self.goal[2] == self.current_floor:
-            self.ax.plot(self.goal[0], self.goal[1], 'ro', markersize=10)
+        for goal in self.goals:
+            if goal and goal[2] == self.current_floor:
+                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
 
         self.ax.set_title(f'Floor {self.current_floor + 1}')
         self.ax.axis('off')
