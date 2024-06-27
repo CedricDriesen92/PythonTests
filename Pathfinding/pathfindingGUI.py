@@ -122,6 +122,7 @@ class InteractiveBIMPathfinder:
         self.update_plot()
 
     def on_press(self, event):
+        self.background = None
         if event.inaxes != self.ax:
             return
         x, y = int(event.xdata), int(event.ydata)
@@ -154,10 +155,12 @@ class InteractiveBIMPathfinder:
         self.update_plot()
 
     def on_release(self, event):
+        self.background = None
         self.dragging = None
 
     def on_motion(self, event):
         if self.dragging and event.inaxes == self.ax:
+            self.background = None
             x, y = int(event.xdata), int(event.ydata)
             if self.dragging == 'start':
                 self.start = (x, y, self.current_floor)
@@ -217,17 +220,20 @@ class InteractiveBIMPathfinder:
 
     def toggle_heuristic(self, event):
         self.show_heuristic = not self.show_heuristic
+        self.background = None
         self.update_plot()
         self.draw_animated_artists()
 
     def prev_floor(self, event):
         if self.current_floor > 0:
             self.current_floor -= 1
+            self.background = None  # Reset background to force full redraw
             self.update_plot()
 
     def next_floor(self, event):
         if self.current_floor < len(self.grids) - 1:
             self.current_floor += 1
+            self.background = None  # Reset background to force full redraw
             self.update_plot()
 
     def set_start_mode(self, event):
@@ -252,6 +258,21 @@ class InteractiveBIMPathfinder:
                     heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
                     self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
 
+            # Update only dynamic elements
+            if self.start and self.start[2] == self.current_floor:
+                start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
+
+            for i, goal in enumerate(self.goals):
+                if goal[2] == self.current_floor:
+                    goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
+                    text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
+
+            if self.path:
+                path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+                if path_on_floor:
+                    path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+                    path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
+
             self.ax.set_title(f'Floor {self.current_floor + 1}')
             self.ax.axis('off')
 
@@ -263,30 +284,30 @@ class InteractiveBIMPathfinder:
         for artist in self.artists:
             artist.remove()
         self.artists.clear()
+        #
+        # # Update only dynamic elements
+        # if self.start and self.start[2] == self.current_floor:
+        #     start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
+        #     self.artists.append(start_point)
+        #
+        # for i, goal in enumerate(self.goals):
+        #     if goal[2] == self.current_floor:
+        #         goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
+        #         self.artists.append(goal_point)
+        #         text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
+        #         self.artists.append(text)
 
-        # Update only dynamic elements
-        if self.start and self.start[2] == self.current_floor:
-            start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
-            self.artists.append(start_point)
-
-        for i, goal in enumerate(self.goals):
-            if goal[2] == self.current_floor:
-                goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-                self.artists.append(goal_point)
-                text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
-                self.artists.append(text)
-
-        if self.path:
-            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-            if path_on_floor:
-                path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
-                path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
-                self.artists.append(path_line)
+        #if self.path:
+        #    path_on_floor = [node for node in self.path if node[2] == self.current_floor]
+        #    if path_on_floor:
+        #        path_x, path_y = zip(*[(node[0], node[1]) for node in path_on_floor])
+        #        path_line, = self.ax.plot(path_x, path_y, 'b-', linewidth=2, label='Path')
+        #        self.artists.append(path_line)
 
         # Update legend
-        legend = self.ax.legend(loc='upper right')
-        if legend:
-            self.artists.append(legend)
+        #legend = self.ax.legend(loc='upper right')
+        #if legend:
+            #self.artists.append(legend)
 
     def find_all_stairs(self):
         grid_stairs = []
