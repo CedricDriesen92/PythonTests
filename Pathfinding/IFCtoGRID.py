@@ -58,7 +58,7 @@ def calculate_bounding_box_and_floors(ifc_file):
     floor_elevations = sorted(list(floor_elevations))
     floors = [{'elevation': e, 'height': next_e - e}
               for e, next_e in zip(floor_elevations, floor_elevations[1:] + [bbox['max_z']])
-              if 1.5 <= next_e - e < 1000]  # Only include floors taller than 1.5m
+              if 1.5 <= next_e - e < 100000]  # Only include floors taller than 1.5m
 
     if not floors:
         print("Warning: No valid floors found. Creating a single floor based on bounding box.")
@@ -110,20 +110,29 @@ def process_element(element, grids, bbox, floors, grid_size, total_elements, cur
 
 def trim_and_pad_grids(grids, padding=1):
     trimmed_grids = []
+    min_x_global = float('inf')
+    max_x_global = float('-inf')
+    min_y_global = float('inf')
+    max_y_global = float('-inf')
 
     for grid in grids:
-        # Find the bounds of non-empty cells
-        non_empty = np.argwhere(grid != 'empty')
+        # Find the bounds of non-empty and non-floor cells
+        non_empty = np.argwhere((grid != 'empty') & (grid != 'floor'))
         if len(non_empty) == 0:
-            trimmed_grids.append(grid)  # If the grid is entirely empty, don't trim
+            trimmed_grids.append(grid)  # If the grid is entirely empty or floor, don't trim
             continue
 
         min_x, min_y = non_empty.min(axis=0)
         max_x, max_y = non_empty.max(axis=0)
+        min_x_global = min(min_x_global, min_x)
+        max_x_global = max(max_x_global, max_x)
+        min_y_global = min(min_y_global, min_y)
+        max_y_global = max(max_y_global, max_y)
 
+    for grid in grids:
         # Trim the grid
-        trimmed = grid[max(0, min_x - padding):min(grid.shape[0], max_x + padding + 1),
-                  max(0, min_y - padding):min(grid.shape[1], max_y + padding + 1)]
+        trimmed = grid[max(0, min_x_global - padding):min(grid.shape[0], max_x_global + padding + 1),
+                  max(0, min_y_global - padding):min(grid.shape[1], max_y_global + padding + 1)]
 
         # Add padding if necessary
         padded = np.full((trimmed.shape[0] + 2 * padding, trimmed.shape[1] + 2 * padding), 'empty', dtype=object)
@@ -138,8 +147,8 @@ def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
     max_x = max(p[0] for p in triangle)
     min_y = min(p[1] for p in triangle)
     max_y = max(p[1] for p in triangle)
-    min_z = min(p[2] for p in triangle) + (-0.3 if element_type in ['stair', 'floor'] else 0.3)
-    max_z = max(p[2] for p in triangle) + (-0.5 if element_type not in ['stair'] else 0.3)
+    min_z = min(p[2] for p in triangle) + (-0.3 if element_type in ['stair'] else 0.3)
+    max_z = max(p[2] for p in triangle) + (-0.5 if element_type not in ['stair', 'floor'] else 0.3)
 
     start_x = max(1, int((min_x - bbox['min_x']) / grid_size) + 1)
     end_x = min(grids[0].shape[0] - 2, int((max_x - bbox['min_x']) / grid_size) + 1)
