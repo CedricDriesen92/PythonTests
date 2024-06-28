@@ -1,2 +1,2 @@
 - Simple .ttl visualizer, static works better than interactive for now.
-- IFC to A* pathfinder, currently only IFC to 3D raster, rest WIP
+- IFC to A* pathfinder, with many options, TODO more documentation
