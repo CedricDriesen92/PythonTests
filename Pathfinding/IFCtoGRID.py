@@ -29,36 +29,46 @@ def calculate_bounding_box_and_floors(ifc_file):
 
     floor_elevations = set()
 
+    # Process all elements to find the actual min and max Z values
+    for item in ifc_file.by_type("IfcProduct"):
+        if item.Representation:
+            try:
+                shape = ifcopenshell.geom.create_shape(settings, item)
+                verts = shape.geometry.verts
+                for i in range(0, len(verts), 3):
+                    x, y, z = verts[i:i + 3]
+                    bbox['min_x'] = min(bbox['min_x'], x)
+                    bbox['min_y'] = min(bbox['min_y'], y)
+                    bbox['min_z'] = min(bbox['min_z'], z)
+                    bbox['max_x'] = max(bbox['max_x'], x)
+                    bbox['max_y'] = max(bbox['max_y'], y)
+                    bbox['max_z'] = max(bbox['max_z'], z)
+            except RuntimeError:
+                pass
+
+    # Use IfcBuildingStorey for initial floor detection
     for item in ifc_file.by_type("IfcBuildingStorey"):
         elevation = item.Elevation
         if elevation is not None:
             floor_elevations.add(float(elevation))
 
-    ifc_items = ifc_file.by_type("IfcProduct")
-    cur = 0
-    for item in ifc_file.by_type("IfcProduct"):
-        if item.is_a() in all_types:
-            cur += 1
-            print(f"Item {cur} out of {len(ifc_items)} processed.")
-            if item.Representation:
-                try:
-                    shape = ifcopenshell.geom.create_shape(settings, item)
-                    verts = shape.geometry.verts
-                    for i in range(0, len(verts), 3):
-                        x, y, z = verts[i:i + 3]
-                        bbox['min_x'] = min(bbox['min_x'], x)
-                        bbox['min_y'] = min(bbox['min_y'], y)
-                        bbox['min_z'] = min(bbox['min_z'], z)
-                        bbox['max_x'] = max(bbox['max_x'], x)
-                        bbox['max_y'] = max(bbox['max_y'], y)
-                        bbox['max_z'] = max(bbox['max_z'], z)
-                except RuntimeError:
-                    pass
-
     floor_elevations = sorted(list(floor_elevations))
-    floors = [{'elevation': e, 'height': next_e - e}
-              for e, next_e in zip(floor_elevations, floor_elevations[1:] + [bbox['max_z']])
-              if 1.5 <= next_e - e < 100000]  # Only include floors taller than 1.5m
+
+    # If no floors detected or unusual elevations, create floors based on bounding box
+    if not floor_elevations or min(floor_elevations) < bbox['min_z'] or max(floor_elevations) > bbox['max_z']:
+        num_floors = max(1, int((bbox['max_z'] - bbox['min_z']) / 3))  # Assume 3m floor height
+        floor_elevations = np.linspace(bbox['min_z'], bbox['max_z'], num_floors + 1)[:-1]
+
+    floors = []
+    for i, e in enumerate(floor_elevations):
+        if i < len(floor_elevations) - 1:
+            next_e = floor_elevations[i + 1]
+        else:
+            next_e = bbox['max_z']
+
+        height = next_e - e
+        if height > 0:  # Accept any positive height
+            floors.append({'elevation': e, 'height': height})
 
     if not floors:
         print("Warning: No valid floors found. Creating a single floor based on bounding box.")
@@ -101,11 +111,23 @@ def process_element(element, grids, bbox, floors, grid_size, total_elements, cur
     else:
         return  # Skip other types
 
-    for i in range(0, len(faces), 3):
-        triangle = [verts[faces[i] * 3:faces[i] * 3 + 3],
-                    verts[faces[i + 1] * 3:faces[i + 1] * 3 + 3],
-                    verts[faces[i + 2] * 3:faces[i + 2] * 3 + 3]]
-        mark_cells(triangle, grids, bbox, floors, grid_size, element_type)
+    if not verts:
+        print(f"Warning: No vertices found for {element.is_a()} (ID: {element.id()})")
+        return
+
+    min_z = min(verts[i+2] for i in range(0, len(verts), 3))
+    max_z = max(verts[i+2] for i in range(0, len(verts), 3))
+
+    print(f"Processing: {element.is_a()} (ID: {element.id()}) on floor(s): ", end="")
+    for floor_index, floor in enumerate(floors):
+        if min_z < floor['elevation'] + floor['height'] and max_z > floor['elevation']:
+            print(f"{floor_index + 1}", end=" ")
+            for i in range(0, len(faces), 3):
+                triangle = [verts[faces[i]*3:faces[i]*3+3],
+                            verts[faces[i+1]*3:faces[i+1]*3+3],
+                            verts[faces[i+2]*3:faces[i+2]*3+3]]
+                mark_cells(triangle, grids[floor_index], bbox, floor, grid_size, element_type)
+    print()
 
 
 def trim_and_pad_grids(grids, padding=1):
@@ -142,29 +164,28 @@ def trim_and_pad_grids(grids, padding=1):
 
     return trimmed_grids
 
-def mark_cells(triangle, grids, bbox, floors, grid_size, element_type):
+def mark_cells(triangle, grid, bbox, floor, grid_size, element_type):
     min_x = min(p[0] for p in triangle)
     max_x = max(p[0] for p in triangle)
     min_y = min(p[1] for p in triangle)
     max_y = max(p[1] for p in triangle)
-    min_z = min(p[2] for p in triangle) + (-0.3 if element_type in ['stair'] else 0.3)
-    max_z = max(p[2] for p in triangle) + (-0.5 if element_type not in ['stair', 'floor'] else 0.3)
+    min_z = min(p[2] for p in triangle)
+    max_z = max(p[2] for p in triangle)
 
-    start_x = max(1, int((min_x - bbox['min_x']) / grid_size) + 1)
-    end_x = min(grids[0].shape[0] - 2, int((max_x - bbox['min_x']) / grid_size) + 1)
-    start_y = max(1, int((min_y - bbox['min_y']) / grid_size) + 1)
-    end_y = min(grids[0].shape[1] - 2, int((max_y - bbox['min_y']) / grid_size) + 1)
+    if min_z < floor['elevation'] + floor['height'] and max_z > floor['elevation']:
+        start_x = max(0, int((min_x - bbox['min_x']) / grid_size))
+        end_x = min(grid.shape[0] - 1, int((max_x - bbox['min_x']) / grid_size))
+        start_y = max(0, int((min_y - bbox['min_y']) / grid_size))
+        end_y = min(grid.shape[1] - 1, int((max_y - bbox['min_y']) / grid_size))
 
-    for floor_index, floor in enumerate(floors):
-        if min_z < floor['elevation'] + floor['height'] and max_z > floor['elevation']:
-            for x in range(start_x, end_x + 1):
-                for y in range(start_y, end_y + 1):
-                    current = grids[floor_index][x, y]
-                    if element_type == 'door' or (element_type == 'stair' and current != 'door') or (
-                            element_type == 'wall' and current not in ['door', 'stair']):
-                        grids[floor_index][x, y] = element_type
-                    if element_type == 'floor' and current == 'empty':
-                        grids[floor_index][x, y] = element_type
+        for x in range(start_x, end_x + 1):
+            for y in range(start_y, end_y + 1):
+                current = grid[x, y]
+                if element_type == 'door' or (element_type == 'stair' and current != 'door') or (
+                        element_type == 'wall' and current not in ['door', 'stair']):
+                    grid[x, y] = element_type
+                if element_type == 'floor' and current == 'empty':
+                    grid[x, y] = element_type
 
 def create_navigation_grid(ifc_file_path, grid_size=0.2):
     ifc_file = load_ifc_file(ifc_file_path)
@@ -188,14 +209,12 @@ def create_navigation_grid(ifc_file_path, grid_size=0.2):
             process_element(element, grids, bbox, floors, grid_size, total_elements, current_element)
 
     print("\nProcessing complete!")
-    # Trim and pad the grids
     grids = trim_and_pad_grids(grids)
 
-    # Update bbox to reflect the new grid dimensions
     x_size = grids[0].shape[0] * grid_size
     y_size = grids[0].shape[1] * grid_size
-    bbox['min_x'] -= grid_size  # Account for padding
-    bbox['min_y'] -= grid_size  # Account for padding
+    bbox['min_x'] -= grid_size
+    bbox['min_y'] -= grid_size
     bbox['max_x'] = bbox['min_x'] + x_size
     bbox['max_y'] = bbox['min_y'] + y_size
 
@@ -249,7 +268,7 @@ def main():
         grid_size = 0.3
         print("invalid size, 0.3 selected")
     fn = askopenfilename(filetypes=[("ifc files", "*.ifc")])
-    ifc_file_path = fn  # Replace with your IFC file path
+    ifc_file_path = fn
     try:
         grids, bbox, floors = create_navigation_grid(ifc_file_path, grid_size=grid_size)
         visualize_grids(grids, floors, grid_size)
@@ -258,7 +277,6 @@ def main():
     except Exception as e:
         print(f"An error occurred: {e}")
         print("Please check your IFC file and ensure it contains the necessary building elements.")
-
 
 if __name__ == "__main__":
     main()
