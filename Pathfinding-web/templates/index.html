@@ -32,6 +32,14 @@
             </form>
         </div>
 
+        <div id="progress-container" class="hidden">
+            <div class="mb-2">Processing IFC file:</div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 mb-1">
+                <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+            <div id="progress-text" class="text-sm">0%</div>
+        </div>
+
         <div id="grid-editor" class="mb-4 hidden">
             <h2 class="text-xl font-bold mb-2">Grid Editor</h2>
             <div class="mb-2">
@@ -49,6 +57,11 @@
                 <button id="add-floor" class="bg-blue-500 text-white px-4 py-2 rounded mr-2">Add Floor</button>
                 <button id="remove-floor" class="bg-red-500 text-white px-4 py-2 rounded mr-2">Remove Floor</button>
                 <span id="current-floor" class="mr-2">Floor: 1</span>
+            </div>
+            <div class="mb-2">
+                <label for="wall-buffer" class="mr-2">Wall Buffer:</label>
+                <input type="range" id="wall-buffer" min="0" max="10" value="1" step="1" class="mr-2">
+                <span id="wall-buffer-display">1</span>
             </div>
             <div class="mb-2">
                 <label for="zoom-slider" class="mr-2">Zoom:</label>

@@ -1,19 +1,13 @@
 import json
 import os
+import time
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 import heapq
-from matplotlib.widgets import Button, Slider, TextBox, RadioButtons, CheckButtons
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
 from scipy.interpolate import griddata
 
-tk.Tk().withdraw()  # part of the import if you are not using other tkinter functions
-from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-import line_profiler_pycharm
-from line_profiler_pycharm import profile
-from timeit import default_timer as timer
+tk.Tk().withdraw()
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -32,22 +26,16 @@ class Node:
 
 
 class InteractiveBIMPathfinder:
-    def __init__(self, filename):
-        self.grids, self.bbox, self.floors, self.grid_size = self.load_grid_data(filename)
+    def __init__(self, grids, grid_size, floors, bbox):
+        self.grids = grids
+        self.bbox = bbox
+        self.floors = floors
+        self.grid_size = grid_size
         self.start = None
         self.goals = []
         self.grid_stairs = None
         self.current_floor = 0
         self.speed = 1  # Default speed
-        self.fig, self.ax = plt.subplots(figsize=(12, 9))
-        self.canvas = self.fig.canvas
-        self.toolbar = NavigationToolbar2Tk(self.canvas, self.fig.canvas.get_tk_widget().master)
-        self.toolbar.update()
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
-        self.dragging = None
-        self.fig.canvas.mpl_connect('button_press_event', self.on_press)
-        self.fig.canvas.mpl_connect('button_release_event', self.on_release)
-        self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
         self.path = None
         self.pathlength = None
@@ -56,150 +44,16 @@ class InteractiveBIMPathfinder:
         self.animated = True
         self.fps = 1
         self.heuristic_style = 'Min'
-        self.show_heuristic = False
         self.heuristic_resolution = 10
         self.allow_diagonal = True
         self.wall_buffer = 0
         self.buffered_grids = None
-        self.background = None
-        self.artists = []
-        self.setup_plot()
-        self.json_filename = filename
 
     def load_grid_data(self, filename):
         with open(filename, 'r') as f:
             data = json.load(f)
         grids = [np.array(grid) for grid in data['grids']]
         return grids, data['bbox'], data['floors'], data['grid_size']
-
-    def setup_plot(self):
-        plt.subplots_adjust(bottom=0.3)
-        self.ax_prev = plt.axes([0.2, 0.15, 0.1, 0.075])
-        self.ax_next = plt.axes([0.31, 0.15, 0.1, 0.075])
-        self.ax_start = plt.axes([0.42, 0.15, 0.1, 0.075])
-        self.ax_goal = plt.axes([0.53, 0.15, 0.1, 0.075])
-        self.ax_run = plt.axes([0.64, 0.15, 0.1, 0.075])
-        #self.ax_speed = plt.axes([0.2, 0.05, 0.6, 0.03])
-        self.ax_pathlength = plt.axes([0.9, 0.15, 0.075, 0.03])
-        self.ax.set_xlim(0, self.grids[0].shape[1])
-        self.ax.set_ylim(0, self.grids[0].shape[0])
-        self.ax_minimize = plt.axes([0.75, 0.3, 0.2, 0.1])
-        self.ax_fps = plt.axes([0.75, 0.65, 0.2, 0.03])
-
-        self.b_prev = Button(self.ax_prev, 'Previous')
-        self.b_next = Button(self.ax_next, 'Next')
-        self.b_start = Button(self.ax_start, 'Set Start')
-        self.b_goal = Button(self.ax_goal, 'Set Goal')
-        self.b_run = Button(self.ax_run, 'Run A*')
-        #self.s_speed = Slider(self.ax_speed, 'Delay', 1, 100, valinit=self.speed, valstep=0.1)
-        self.t_pathlength = TextBox(self.ax_pathlength, 'Path Length:', initial='0')
-        self.radio_minimize = RadioButtons(self.ax_minimize, ('Cost', 'Distance'))
-        self.s_fps = Slider(self.ax_fps, 'fps', 0.1, 5, valinit=self.fps, valstep=0.1)
-
-        self.b_prev.on_clicked(self.prev_floor)
-        self.b_next.on_clicked(self.next_floor)
-        self.b_start.on_clicked(self.set_start_mode)
-        self.b_goal.on_clicked(self.set_goal_mode)
-        self.b_run.on_clicked(self.run_algorithm)
-        #self.s_speed.on_changed(self.update_speed)
-        self.radio_minimize.on_clicked(self.set_minimize)
-        self.s_fps.on_changed(self.update_fps)
-
-        self.ax_heuristic = plt.axes([0.75, 0.5, 0.2, 0.05])
-        self.b_heuristic = Button(self.ax_heuristic, 'Toggle Heuristic')
-        self.b_heuristic.on_clicked(self.toggle_heuristic)
-
-        self.ax_heuristic_style = plt.axes([0.75, 0.4, 0.2, 0.1])
-        self.radio_heuristic_style = RadioButtons(self.ax_heuristic_style, ('Min', 'Sum'))
-        self.radio_heuristic_style.on_clicked(self.set_heuristic_style)
-
-        self.ax_diagonal = plt.axes([0.75, 0.25, 0.2, 0.05])
-        self.check_diagonal = CheckButtons(self.ax_diagonal, ['Allow Diagonal'], [self.allow_diagonal])
-        self.check_diagonal.on_clicked(self.toggle_diagonal)
-
-        self.ax_animate = plt.axes([0.75, 0.7, 0.2, 0.05])
-        self.check_animate = CheckButtons(self.ax_animate, ['Animate'], [self.animated])
-        self.check_animate.on_clicked(self.toggle_animation)
-
-        self.ax_identify_exits = plt.axes([0.75, 0.55, 0.2, 0.05])
-        self.b_identify_exits = Button(self.ax_identify_exits, 'Identify Exits')
-        self.b_identify_exits.on_clicked(self.identify_exits)
-
-        self.ax_buffer = plt.axes([0.75, 0.6, 0.2, 0.03])
-        self.s_buffer = Slider(self.ax_buffer, 'Wall Buffer', 0, self.grid_size*10, valinit=0, valstep=self.grid_size)
-        self.s_buffer.on_changed(self.update_buffer)
-
-        self.mode = None
-        #self.fig.canvas.mpl_connect('button_press_event', self.on_click)
-        self.fig.canvas.mpl_connect('draw_event', self.on_draw)
-        self.apply_wall_buffer()
-        self.update_plot()
-
-    def on_press(self, event):
-        self.background = None
-        if event.inaxes != self.ax:
-            return
-        x, y = int(event.xdata), int(event.ydata)
-
-        # Check if clicking on start point
-        if self.start and abs(x - self.start[0]) <= 1 and abs(y - self.start[1]) <= 1 and self.current_floor == \
-                self.start[2]:
-            self.dragging = 'start'
-            return
-
-        # Check if clicking on a goal point
-        for i, goal in enumerate(self.goals):
-            if abs(x - goal[0]) <= 1 and abs(y - goal[1]) <= 1 and self.current_floor == goal[2]:
-                if event.button == 1:  # Left click to drag
-                    self.dragging = ('goal', i)
-                elif event.button == 3:  # Right click to delete
-                    self.goals.pop(i)
-                    self.update_plot()
-                return
-
-        # If not clicking on existing points, add new start/goal
-        if self.mode == 'start':
-            self.start = (x, y, self.current_floor)
-            print(f"Start set to: {self.start}")
-        elif self.mode == 'goal':
-            new_goal = (x, y, self.current_floor)
-            self.goals.append(new_goal)
-            print(f"Goal added: {new_goal}")
-        self.mode = None
-        self.update_plot()
-
-    def on_release(self, event):
-        self.background = None
-        self.dragging = None
-
-    def on_motion(self, event):
-        if self.dragging and event.inaxes == self.ax:
-            self.background = None
-            x, y = int(event.xdata), int(event.ydata)
-            if self.dragging == 'start':
-                self.start = (x, y, self.current_floor)
-            elif self.dragging[0] == 'goal':
-                i = self.dragging[1]
-                self.goals[i] = (x, y, self.current_floor)
-            self.update_plot()
-
-    def on_draw(self, event):
-        self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
-        self.draw_animated_artists()
-
-    def draw_animated_artists(self):
-        for artist in self.artists:
-            try:
-                if isinstance(artist, plt.Text):
-                    # For Text artists, check if axes are valid
-                    if artist.axes is not None and artist.axes.transData is not None:
-                        self.ax.draw_artist(artist)
-                else:
-                    self.ax.draw_artist(artist)
-            except AttributeError:
-                # Ignore AttributeError, which might occur if axes are not ready
-                pass
-        self.fig.canvas.blit(self.ax.bbox)
 
     def set_algorithm(self, label):
         self.algorithm = label
@@ -212,9 +66,6 @@ class InteractiveBIMPathfinder:
 
     def set_heuristic_style(self, label):
         self.heuristic_style = label.lower()
-        if self.show_heuristic:
-            self.calculate_sparse_heuristic()
-            self.update_plot()
 
     def toggle_diagonal(self, label):
         self.allow_diagonal = not self.allow_diagonal
@@ -235,7 +86,6 @@ class InteractiveBIMPathfinder:
         self.buffered_grids = []
         for floor in self.grids:
             buffered_floor = floor.copy()
-            #print(floor[0:10, 0:3])
             wall_mask = (floor == 'wall')
 
             buffer_distance = int(self.wall_buffer / self.grid_size)
@@ -245,10 +95,36 @@ class InteractiveBIMPathfinder:
             rows, cols = wall_mask.shape
             for i in range(rows):
                 for j in range(cols):
-                    if wall_mask[i, j] and floor[i,j] not in ['wall', 'door', 'stair']:
-                        buffered_floor[i,j] = 'walla'
+                    if wall_mask[i, j] and floor[i, j] not in ['wall', 'door', 'stair']:
+                        buffered_floor[i, j] = 'walla'
             self.buffered_grids.append(buffered_floor)
-            #print(buffered_floor[0:10, 0:3])
+        return self.buffered_grids
+
+    def update_buffer_for_cells(self, floor, affected_cells, wall_buffer):
+        buffered_floor = self.buffered_grids[floor].copy()
+        original_floor = self.grids[floor]
+        buffer_distance = int(wall_buffer / self.grid_size)
+
+        for cell in affected_cells:
+            row, col = cell
+            sub_grid = original_floor[max(0, row - buffer_distance):row + buffer_distance + 1,
+                       max(0, col - buffer_distance):col + buffer_distance + 1]
+            sub_mask = (sub_grid == 'wall')
+            for _ in range(buffer_distance):
+                sub_mask = self.expand_mask(sub_mask)
+
+            sub_rows, sub_cols = sub_mask.shape
+            for i in range(sub_rows):
+                for j in range(sub_cols):
+                    actual_row = max(0, row - buffer_distance) + i
+                    actual_col = max(0, col - buffer_distance) + j
+                    if sub_mask[i, j] and original_floor[actual_row, actual_col] not in ['wall', 'door', 'stair']:
+                        buffered_floor[actual_row, actual_col] = 'walla'
+                    elif not sub_mask[i, j] and buffered_floor[actual_row, actual_col] == 'walla':
+                        buffered_floor[actual_row, actual_col] = original_floor[actual_row, actual_col]
+
+        self.buffered_grids[floor] = buffered_floor
+        return buffered_floor
 
     def expand_mask(self, mask):
         expanded = mask.copy()
@@ -311,8 +187,6 @@ class InteractiveBIMPathfinder:
             if exit not in self.goals:
                 self.goals.append(exit)
 
-        self.update_plot()
-
     def is_exit(self, floor, x, y):
         directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
         rows, cols = floor.shape
@@ -356,61 +230,6 @@ class InteractiveBIMPathfinder:
 
         return False
 
-    def update_plot(self):
-        if self.background is None:
-            self.ax.clear()
-            if self.wall_buffer > 0:
-                colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
-                color_map = ListedColormap(colors)
-                grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
-            else:
-                colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-                color_map = ListedColormap(colors)
-                grid = self.grid_to_numeric(self.grids[self.current_floor])
-
-            self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
-
-            if self.show_heuristic and self.goals:
-                heuristic_map = self.calculate_sparse_heuristic()
-                if heuristic_map is not None:
-                    heuristic_cmap = LinearSegmentedColormap.from_list("", ["blue", "green", "yellow", "red"])
-                    self.ax.imshow(heuristic_map.T, cmap=heuristic_cmap, alpha=0.5)
-
-            # Update only dynamic elements
-            if self.start and self.start[2] == self.current_floor:
-                start_point, = self.ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
-
-            for i, goal in enumerate(self.goals):
-                if goal[2] == self.current_floor:
-                    goal_point, = self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-                    text = self.ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
-
-            if self.path:
-                path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-                for i in range(len(path_on_floor) - 1):
-                    start = path_on_floor[i]
-                    end = path_on_floor[i + 1]
-
-                    # Check if this segment is continuous or a jump
-                    if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
-                        # Discontinuous segment - draw in green
-                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
-                    else:
-                        # Continuous segment - draw in blue
-                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
-
-            self.ax.set_title(f'Floor {self.current_floor + 1}')
-            self.ax.axis('off')
-
-            self.fig.canvas.draw()
-            self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
-        else:
-            self.fig.canvas.restore_region(self.background)
-
-        for artist in self.artists:
-            artist.remove()
-        self.artists.clear()
-
     def find_all_stairs(self):
         grid_stairs = []
         #print(self.grids)
@@ -423,7 +242,6 @@ class InteractiveBIMPathfinder:
         self.grid_stairs = grid_stairs
 
     # find nearest stairs leading to the goal floor
-    @profile
     def find_nearest_stairs(self, position, goal_position):
         if not self.grid_stairs:
             self.find_all_stairs()
@@ -444,7 +262,6 @@ class InteractiveBIMPathfinder:
                     nearest_stairs = (i, j, z)
         return nearest_stairs
 
-    @profile
     def heuristic(self, a, position_b):
         if not self.goals:
             return 0  # Return 0 if there are no goals
@@ -571,10 +388,9 @@ class InteractiveBIMPathfinder:
         if self.algorithm == 'A*':
             self.run_astar()
 
-    @profile
     def run_astar(self):
         fps = self.fps
-        time0 = timer()
+        time0 = time.time()
         self.path = None
         open_list = []
         closed_set = set()
@@ -621,8 +437,8 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer() - time0 > 1.0 / fps and self.animated:
-                    time0 = timer()
+                if time.time() - time0 > 1.0 / fps and self.animated:
+                    time0 = time.time()
                     self.visualize_progress(closed_set, [node for _, node in open_list],
                                             self.get_current_path(current_node))
                     progress_counter = 0
@@ -642,160 +458,6 @@ class InteractiveBIMPathfinder:
         self.pathlength = path_length
         self.visualize_path()
 
-    @profile
-    def visualize_progress(self, closed_set, open_list, current_path):
-        self.ax.clear()
-        if self.wall_buffer > 0:
-            colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
-            color_map = ListedColormap(colors)
-            grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
-        else:
-            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-            color_map = ListedColormap(colors)
-            grid = self.grid_to_numeric(self.grids[self.current_floor])
-
-        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
-
-        # Plot closed set
-        closed_on_floor = [node for node in closed_set if node[2] == self.current_floor]
-        if closed_on_floor:
-            closed_x, closed_y = zip(*[(node[0], node[1]) for node in closed_on_floor])
-            self.ax.scatter(closed_x, closed_y, color='blue', alpha=0.1, s=20)
-
-        # Plot open list
-        open_on_floor = [node.position for node in open_list if node.position[2] == self.current_floor]
-        if open_on_floor:
-            open_x, open_y = zip(*[(node[0], node[1]) for node in open_on_floor])
-            self.ax.scatter(open_x, open_y, color='aqua', alpha=0.4, s=20)
-
-        # Plot current path
-        if current_path:
-            current_path_on_floor = [node for node in current_path if node[2] == self.current_floor]
-            if len(current_path_on_floor) > 1:
-                for i in range(len(current_path_on_floor) - 1):
-                    start = current_path_on_floor[i]
-                    end = current_path_on_floor[i + 1]
-
-                    # Check if this segment is continuous or a jump
-                    if abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1:
-                        # Discontinuous segment - draw in green
-                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
-                    else:
-                        # Continuous segment - draw in blue
-                        self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
-
-        # Plot start and goal
-        if self.start and self.start[2] == self.current_floor:
-            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        for goal in self.goals:
-            if goal and goal[2] == self.current_floor:
-                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-
-        self.ax.set_title(f'Floor {self.current_floor + 1}')
-        self.ax.axis('off')
-        plt.draw()
-        plt.pause(0.01)
-
-    def visualize_path(self):
-        self.ax.clear()
-
-        if self.wall_buffer > 0:
-            colors = ['white', 'black', 'orange', 'red', 'lavenderblush', 'lightgray']
-            color_map = ListedColormap(colors)
-            grid = self.grid_to_numeric(self.buffered_grids[self.current_floor])
-        else:
-            colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-            color_map = ListedColormap(colors)
-            grid = self.grid_to_numeric(self.grids[self.current_floor])
-
-        self.ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
-
-        if self.path:
-            path_on_floor = [node for node in self.path if node[2] == self.current_floor]
-            for i in range(len(path_on_floor) - 1):
-                start = path_on_floor[i]
-                end = path_on_floor[i + 1]
-
-                # Check if this segment is continuous or a jump
-                if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
-                    # Discontinuous segment - draw in green
-                    self.ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
-                else:
-                    # Continuous segment - draw in blue
-                    self.ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
-
-        if self.start and self.start[2] == self.current_floor:
-            self.ax.plot(self.start[0], self.start[1], 'go', markersize=10)
-        for goal in self.goals:
-            if goal and goal[2] == self.current_floor:
-                self.ax.plot(goal[0], goal[1], 'ro', markersize=10)
-
-        self.ax.set_title(f'Floor {self.current_floor + 1}')
-        self.ax.axis('off')
-        plt.draw()
-        plt.pause(0.001)
-
-    import os
-    import matplotlib.pyplot as plt
-
-    def save_path_visualization(self):
-        if not self.path:
-            print("No path to visualize.")
-            return
-
-        # Determine which floors are part of the path
-        floors_in_path = sorted(set(node[2] for node in self.path), reverse=True)
-
-        # Create a new figure with subplots for each floor in the path
-        fig, axes = plt.subplots(len(floors_in_path), 1, figsize=(12, 9 * len(floors_in_path)))
-        if len(floors_in_path) == 1:
-            axes = [axes]
-
-        colors = ['white', 'black', 'orange', 'red', 'lavenderblush']
-        color_map = ListedColormap(colors)
-
-        for ax, floor_index in zip(axes, floors_in_path):
-            grid = self.grid_to_numeric(self.grids[floor_index])
-            ax.imshow(grid.T, cmap=color_map, interpolation='nearest')
-
-            if self.start and self.start[2] == floor_index:
-                ax.plot(self.start[0], self.start[1], 'go', markersize=10, label='Start')
-
-            for i, goal in enumerate(self.goals):
-                if goal[2] == floor_index:
-                    ax.plot(goal[0], goal[1], 'ro', markersize=10)
-                    ax.annotate(str(i + 1), (goal[0], goal[1]), color='white', ha='center', va='center')
-
-            path_on_floor = [node for node in self.path if node[2] == floor_index]
-            if path_on_floor:
-                for i in range(len(path_on_floor) - 1):
-                    start = path_on_floor[i]
-                    end = path_on_floor[i + 1]
-
-                    # Check if this segment is continuous or a jump
-                    if (abs(end[0] - start[0]) > 1 or abs(end[1] - start[1]) > 1):
-                        # Discontinuous segment - draw in green
-                        ax.plot([start[0], end[0]], [start[1], end[1]], color='green', linewidth=2, linestyle='--')
-                    else:
-                        # Continuous segment - draw in blue
-                        ax.plot([start[0], end[0]], [start[1], end[1]], color='blue', linewidth=2)
-
-            ax.set_title(f'Floor {floor_index + 1}')
-            ax.axis('off')
-
-        plt.tight_layout()
-
-        # Create subfolder with the same name as the JSON import (without extension)
-        folder_name = os.path.splitext(os.path.basename(self.json_filename))[0]
-        os.makedirs(folder_name, exist_ok=True)
-
-        # Save the figure
-        plt.savefig(os.path.join(folder_name, f"path_visualization_len_{str(int(self.pathlength))}.png"),
-                    bbox_inches='tight', pad_inches=0.1)
-        plt.close(fig)
-
-        print(f"Path visualization saved in {folder_name}/path_visualization_len_{str(int(self.pathlength))}.png")
-
     def get_current_path(self, node):
         path = []
         while node:
@@ -807,7 +469,6 @@ class InteractiveBIMPathfinder:
 def main():
     fn = askopenfilename(filetypes=[("json files", "*.json")])
     pathfinder = InteractiveBIMPathfinder(fn)
-    plt.show()
 
 
 if __name__ == "__main__":

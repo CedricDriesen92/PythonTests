@@ -8,12 +8,10 @@ from matplotlib.widgets import Button, Slider, TextBox, RadioButtons, CheckButto
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
 from scipy.interpolate import griddata
+import time
 
 tk.Tk().withdraw()  # part of the import if you are not using other tkinter functions
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-import line_profiler_pycharm
-from line_profiler_pycharm import profile
-from timeit import default_timer as timer
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -423,7 +421,6 @@ class InteractiveBIMPathfinder:
         self.grid_stairs = grid_stairs
 
     # find nearest stairs leading to the goal floor
-    @profile
     def find_nearest_stairs(self, position, goal_position):
         if not self.grid_stairs:
             self.find_all_stairs()
@@ -444,7 +441,6 @@ class InteractiveBIMPathfinder:
                     nearest_stairs = (i, j, z)
         return nearest_stairs
 
-    @profile
     def heuristic(self, a, position_b):
         if not self.goals:
             return 0  # Return 0 if there are no goals
@@ -571,10 +567,9 @@ class InteractiveBIMPathfinder:
         if self.algorithm == 'A*':
             self.run_astar()
 
-    @profile
     def run_astar(self):
         fps = self.fps
-        time0 = timer()
+        time0 = time.time()
         self.path = None
         open_list = []
         closed_set = set()
@@ -621,8 +616,8 @@ class InteractiveBIMPathfinder:
 
             progress_counter += 1
             if progress_threshold == 0 or progress_counter >= progress_threshold:
-                if timer() - time0 > 1.0 / fps and self.animated:
-                    time0 = timer()
+                if time.time() - time0 > 1.0 / fps and self.animated:
+                    time0 = time.time()
                     self.visualize_progress(closed_set, [node for _, node in open_list],
                                             self.get_current_path(current_node))
                     progress_counter = 0
@@ -642,7 +637,6 @@ class InteractiveBIMPathfinder:
         self.pathlength = path_length
         self.visualize_path()
 
-    @profile
     def visualize_progress(self, closed_set, open_list, current_path):
         self.ax.clear()
         if self.wall_buffer > 0:

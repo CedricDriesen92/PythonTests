@@ -12,32 +12,70 @@ let lastPaintedCell = null;
 let lastPreviewCell = null;
 let previewCells = new Set();
 let isMouseDown = false;
+let wallBuffer = 1;
+let paintedCells = new Set();
 
 
-document.getElementById('file-upload-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
+function uploadFile(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
 
-    try {
-        const response = await fetch('/process-file', {
-            method: 'POST',
-            body: formData
-        });
-        const data = await response.json();
-        if (data.error) {
-            alert(data.error);
-        } else {
-            gridData = data;
-            initializeGrid();
-            document.getElementById('grid-editor').classList.remove('hidden');
-            document.getElementById('pathfinder').classList.remove('hidden');
-            updateFloorDisplay();
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+
+    progressContainer.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = 'Initializing...';
+
+    // First, send the file
+    fetch('/process-file', {
+        method: 'POST',
+        body: formData
+    }).then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
         }
-    } catch (error) {
+        // If file upload successful, start listening for progress
+        const eventSource = new EventSource('/process-file-sse');
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.progress !== undefined) {
+                const progress = data.progress;
+                progressBar.style.width = `${progress}%`;
+                progressText.textContent = `${progress.toFixed(1)}%: ${data.message}`;
+            } else if (data.complete) {
+                eventSource.close();
+                progressContainer.classList.add('hidden');
+                // Handle the completed data
+                gridData = data.result;
+                initializeGrid();
+                document.getElementById('grid-editor').classList.remove('hidden');
+                document.getElementById('pathfinder').classList.remove('hidden');
+                updateFloorDisplay();
+            } else if (data.error) {
+                eventSource.close();
+                progressContainer.classList.add('hidden');
+                console.error('Processing error:', data.error);
+                alert(`An error occurred while processing the file: ${data.error}`);
+            }
+        };
+
+        eventSource.onerror = function(error) {
+            console.error('EventSource failed:', error);
+            eventSource.close();
+            progressContainer.classList.add('hidden');
+            alert('An error occurred while processing the file.');
+        };
+    }).catch(error => {
         console.error('Error:', error);
-        alert('An error occurred while processing the file.');
-    }
-});
+        progressContainer.classList.add('hidden');
+        alert('An error occurred while uploading the file.');
+    });
+}
+
+document.getElementById('file-upload-form').addEventListener('submit', uploadFile);
 
 function initializeGrid() {
     const container = document.getElementById('grid-container');
@@ -45,6 +83,9 @@ function initializeGrid() {
     const containerHeight = container.clientHeight;
     const gridWidth = gridData.grids[0][0].length;
     const gridHeight = gridData.grids[0].length;
+    // After loading initial grid data
+    gridData.buffered_grids = gridData.grids;
+    updateBufferForPaintedCells();
 
     console.log(`Container: ${containerWidth}x${containerHeight}, Grid: ${gridWidth}x${gridHeight}`);
 
@@ -61,7 +102,7 @@ function initializeGrid() {
     cellSize = (zoomPercentage / 100) * minZoom;
 
     updateZoomLevel();
-    renderGrid(gridData.grids[currentFloor]);
+    renderGrid(gridData.buffered_grids[currentFloor]);
 }
 
 function renderGrid(grid) {
@@ -109,7 +150,10 @@ function updateCellAppearance(cellElement, cellType) {
             cellElement.classList.add('bg-red-500');
             break;
         case 'floor':
-            cellElement.classList.add('bg-pink-100');
+            cellElement.classList.add('bg-pink-200');
+            break;
+        case 'walla':
+            cellElement.classList.add('bg-gray-400');
             break;
         default:
             cellElement.classList.add('bg-white');
@@ -125,10 +169,14 @@ function startPainting(e) {
 }
 
 function stopPainting() {
+    gridData.buffered_grids = gridData.grids;
     isPainting = false;
     isMouseDown = false;
     lastPreviewCell = lastPaintedCell;
     lastPaintedCell = null;
+    if (paintedCells.size > 0) {
+        updateBufferForPaintedCells();
+    }
 }
 
 function paint(e) {
@@ -165,6 +213,7 @@ function paintWithBrush(centerRow, centerCol) {
             if (row >= 0 && row < gridData.grids[currentFloor].length &&
                 col >= 0 && col < gridData.grids[currentFloor][0].length) {
                 gridData.grids[currentFloor][row][col] = currentType;
+                paintedCells.add(`${row},${col}`);
                 const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
                 if (cell) {
                     updateCellAppearance(cell, currentType);
@@ -222,7 +271,18 @@ document.getElementById('draw-empty').addEventListener('click', () => {currentTy
 document.getElementById('prev-floor').addEventListener('click', () => {
     if (currentFloor > 0) {
         currentFloor--;
-        renderGrid(gridData.grids[currentFloor]);
+        updateBufferForPaintedCells();
+        renderGrid(gridData.buffered_grids[currentFloor]);
+        updateFloorDisplay();
+    }
+});
+
+
+document.getElementById('next-floor').addEventListener('click', () => {
+    if (currentFloor < gridData.grids.length - 1) {
+        currentFloor++;
+        updateBufferForPaintedCells();
+        renderGrid(gridData.buffered_grids[currentFloor]);
         updateFloorDisplay();
     }
 });
@@ -316,13 +376,6 @@ function handleMouseLeave() {
     stopPainting();
 }
 
-document.getElementById('next-floor').addEventListener('click', () => {
-    if (currentFloor < gridData.grids.length - 1) {
-        currentFloor++;
-        renderGrid(gridData.grids[currentFloor]);
-        updateFloorDisplay();
-    }
-});
 
 
 document.getElementById('fill-tool').addEventListener('click', () => currentTool = 'fill');
@@ -452,6 +505,55 @@ function downloadGrid() {
     URL.revokeObjectURL(url);
 }
 
+document.getElementById('wall-buffer').addEventListener('input', (e) => {
+    wallBuffer = parseInt(e.target.value);
+    document.getElementById('wall-buffer-display').textContent = wallBuffer;
+    updateWallBuffer(wallBuffer);
+});
+
+function updateBufferForPaintedCells() {
+    //const affectedCells = Array.from(paintedCells).map(coord => coord.split(',').map(Number));
+    affectedCells = [0];
+    fetch('/update-buffer', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            floor: currentFloor,
+            affected_cells: affectedCells,
+            wall_buffer: wallBuffer,
+            grid: gridData.grids[currentFloor]
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        gridData.buffered_grids[currentFloor] = data.updated_floor;
+        renderGrid(gridData.buffered_grids[currentFloor]);
+        paintedCells.clear();
+    })
+    .catch(error => console.error('Error:', error));
+}
+
+function updateWallBuffer(newBufferValue) {
+    fetch('/apply-wall-buffer', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            grids: gridData.grids,
+            wall_buffer: newBufferValue
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        gridData.buffered_grids = data.buffered_grids;
+        renderGrid(gridData.buffered_grids[currentFloor]);
+    })
+    .catch(error => console.error('Error:', error));
+}
+
 // Prevent dragging on the grid container
 document.getElementById('grid-container').addEventListener('dragstart', (e) => e.preventDefault());
 
@@ -459,3 +561,4 @@ document.getElementById('grid-container').addEventListener('dragstart', (e) => e
 document.getElementById('grid-container').addEventListener('mouseleave', stopPainting);
 
 document.getElementById('download-grid').addEventListener('click', downloadGrid);
+
