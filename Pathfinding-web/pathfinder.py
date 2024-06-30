@@ -11,9 +11,6 @@ from scipy.interpolate import griddata
 
 tk.Tk().withdraw()  # part of the import if you are not using other tkinter functions
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-import line_profiler_pycharm
-from line_profiler_pycharm import profile
-from timeit import default_timer as timer
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -423,7 +420,6 @@ class InteractiveBIMPathfinder:
         self.grid_stairs = grid_stairs
 
     # find nearest stairs leading to the goal floor
-    @profile
     def find_nearest_stairs(self, position, goal_position):
         if not self.grid_stairs:
             self.find_all_stairs()
@@ -444,7 +440,6 @@ class InteractiveBIMPathfinder:
                     nearest_stairs = (i, j, z)
         return nearest_stairs
 
-    @profile
     def heuristic(self, a, position_b):
         if not self.goals:
             return 0  # Return 0 if there are no goals
@@ -571,7 +566,6 @@ class InteractiveBIMPathfinder:
         if self.algorithm == 'A*':
             self.run_astar()
 
-    @profile
     def run_astar(self):
         fps = self.fps
         time0 = timer()
@@ -642,7 +636,6 @@ class InteractiveBIMPathfinder:
         self.pathlength = path_length
         self.visualize_path()
 
-    @profile
     def visualize_progress(self, closed_set, open_list, current_path):
         self.ax.clear()
         if self.wall_buffer > 0:
@@ -734,9 +727,6 @@ class InteractiveBIMPathfinder:
         self.ax.axis('off')
         plt.draw()
         plt.pause(0.001)
-
-    import os
-    import matplotlib.pyplot as plt
 
     def save_path_visualization(self):
         if not self.path:
