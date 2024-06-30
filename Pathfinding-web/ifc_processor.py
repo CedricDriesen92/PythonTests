@@ -1,7 +1,6 @@
 import ifcopenshell
 import ifcopenshell.geom
 import numpy as np
-import matplotlib.pyplot as plt
 import json
 import tkinter as tk
 from tkinter.filedialog import askopenfilename
@@ -221,33 +220,6 @@ def create_navigation_grid(ifc_file_path, grid_size=0.2):
     return grids, bbox, floors
 
 
-def visualize_grids(grids, floors, grid_size):
-    num_floors = len(grids)
-    fig, axs = plt.subplots(num_floors, 1, figsize=(8, 5 * num_floors), squeeze=False)
-
-    colors = {
-        'wall': 'black',
-        'floor': 'lavenderblush',
-        'door': 'orange',
-        'stair': 'red',
-        'empty': 'white'
-    }
-
-    for floor_index, (ax, floor) in enumerate(zip(axs.flat, floors)):
-        for element_type in ['empty', 'wall', 'stair', 'floor', 'door']:  # Order matters for visibility
-            y, x = np.where(grids[floor_index] == element_type)
-            ax.scatter(x, y, c=colors[element_type], marker='s', s=grid_size * 80, edgecolors='none')
-
-        ax.set_title(f'Floor {floor_index + 1} (Elevation: {floor["elevation"]:.2f}m)')
-        ax.set_aspect('equal', 'box')
-        ax.invert_yaxis()
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-    plt.tight_layout()
-    plt.show()
-
-
 def export_grids(grids, bbox, floors, grid_size, filename):
     data = {
         'grids': [grid.tolist() for grid in grids],
@@ -271,7 +243,6 @@ def main():
     ifc_file_path = fn
     try:
         grids, bbox, floors = create_navigation_grid(ifc_file_path, grid_size=grid_size)
-        visualize_grids(grids, floors, grid_size)
         export_grids(grids, bbox, floors, grid_size, 'bim_grids.json')
         print("Grid creation, visualization, and export successful.")
     except Exception as e:
