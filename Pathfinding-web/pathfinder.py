@@ -93,10 +93,36 @@ class InteractiveBIMPathfinder:
             rows, cols = wall_mask.shape
             for i in range(rows):
                 for j in range(cols):
-                    if wall_mask[i, j] and floor[i,j] not in ['wall', 'door', 'stair']:
-                        buffered_floor[i,j] = 'walla'
+                    if wall_mask[i, j] and floor[i, j] not in ['wall', 'door', 'stair']:
+                        buffered_floor[i, j] = 'walla'
             self.buffered_grids.append(buffered_floor)
-            #print(buffered_floor[0:10, 0:3])
+        return self.buffered_grids
+
+    def update_buffer_for_cells(self, floor, affected_cells, wall_buffer):
+        buffered_floor = self.buffered_grids[floor].copy()
+        original_floor = self.grids[floor]
+        buffer_distance = int(wall_buffer / self.grid_size)
+
+        for cell in affected_cells:
+            row, col = cell
+            sub_grid = original_floor[max(0, row - buffer_distance):row + buffer_distance + 1,
+                       max(0, col - buffer_distance):col + buffer_distance + 1]
+            sub_mask = (sub_grid == 'wall')
+            for _ in range(buffer_distance):
+                sub_mask = self.expand_mask(sub_mask)
+
+            sub_rows, sub_cols = sub_mask.shape
+            for i in range(sub_rows):
+                for j in range(sub_cols):
+                    actual_row = max(0, row - buffer_distance) + i
+                    actual_col = max(0, col - buffer_distance) + j
+                    if sub_mask[i, j] and original_floor[actual_row, actual_col] not in ['wall', 'door', 'stair']:
+                        buffered_floor[actual_row, actual_col] = 'walla'
+                    elif not sub_mask[i, j] and buffered_floor[actual_row, actual_col] == 'walla':
+                        buffered_floor[actual_row, actual_col] = original_floor[actual_row, actual_col]
+
+        self.buffered_grids[floor] = buffered_floor
+        return buffered_floor
 
     def expand_mask(self, mask):
         expanded = mask.copy()
