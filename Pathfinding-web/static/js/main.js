@@ -12,7 +12,7 @@ let lastPaintedCell = null;
 let lastPreviewCell = null;
 let previewCells = new Set();
 let isMouseDown = false;
-let wallBuffer = 1;
+let wallBuffer = 0;
 let paintedCells = new Set();
 
 
@@ -108,56 +108,59 @@ function initializeGrid() {
 function renderGrid(grid) {
     const container = document.getElementById('grid-container');
     container.innerHTML = '';
-    container.style.display = 'grid';
-    container.style.gridTemplateColumns = `repeat(${grid[0].length}, ${cellSize}px)`;
 
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const gridWidth = grid[0].length;
+    const gridHeight = grid.length;
+
+    canvas.width = gridWidth * cellSize;
+    canvas.height = gridHeight * cellSize;
+
+    // Set canvas size
+    canvas.style.width = `${gridWidth * cellSize}px`;
+    canvas.style.height = `${gridHeight * cellSize}px`;
+
+    // Draw grid
     grid.forEach((row, i) => {
         row.forEach((cell, j) => {
-            const div = document.createElement('div');
-            div.style.width = `${cellSize}px`;
-            div.style.height = `${cellSize}px`;
-            div.classList.add('border', 'border-gray-300');
-            div.dataset.row = i;
-            div.dataset.col = j;
+            ctx.fillStyle = getCellColor(cell);
+            ctx.fillRect(j * cellSize, i * cellSize, cellSize, cellSize);
 
-            updateCellAppearance(div, cell);
-
-            div.addEventListener('mousedown', startPainting);
-            div.addEventListener('mousemove', handleMouseMove);
-            div.addEventListener('mouseup', stopPainting);
-            container.appendChild(div);
+            // Draw cell border
+            //ctx.strokeStyle = '#e5e7eb'; // border-gray-300 equivalent
+            //ctx.strokeRect(j * cellSize, i * cellSize, cellSize, cellSize);
         });
     });
 
-    container.addEventListener('mouseleave', handleMouseLeave);
+    container.appendChild(canvas);
+
+    // Add event listeners
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('mouseleave', handleMouseLeave);
 }
 
-function updateCellAppearance(cellElement, cellType) {
-    cellElement.className = 'border border-gray-300';
-    if (cellElement.classList.contains('preview')) {
-        cellElement.classList.add('preview');
-    }
-    cellElement.style.width = `${cellSize}px`;
-    cellElement.style.height = `${cellSize}px`;
+function getCellColor(cellType) {
     switch (cellType) {
-        case 'wall':
-            cellElement.classList.add('bg-black');
-            break;
-        case 'door':
-            cellElement.classList.add('bg-orange-500');
-            break;
-        case 'stair':
-            cellElement.classList.add('bg-red-500');
-            break;
-        case 'floor':
-            cellElement.classList.add('bg-pink-200');
-            break;
-        case 'walla':
-            cellElement.classList.add('bg-gray-400');
-            break;
-        default:
-            cellElement.classList.add('bg-white');
+        case 'wall': return '#000000';
+        case 'door': return '#f97316';
+        case 'stair': return '#ef4444';
+        case 'floor': return '#fbcfe8';
+        case 'walla': return '#9ca3af';
+        default: return '#ffffff';
     }
+}
+
+function updateCellAppearance(row, col, cellType) {
+    const canvas = document.querySelector('#grid-container canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = getCellColor(cellType);
+    ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.strokeRect(col * cellSize, row * cellSize, cellSize, cellSize);
 }
 
 function startPainting(e) {
@@ -342,40 +345,49 @@ function previewInterpolation(startRow, startCol, endRow, endCol) {
 }
 
 function previewCell(row, col) {
-    if (row >= 0 && row < gridData.grids[currentFloor].length &&
-        col >= 0 && col < gridData.grids[currentFloor][0].length) {
-        const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-        if (cell) {
-            cell.classList.add('preview');
-            updateCellAppearance(cell, currentType);
-            previewCells.add(cell);
-        }
-    }
+    const canvas = document.querySelector('#grid-container canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = getCellColor(currentType);
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+    ctx.globalAlpha = 1.0;
 }
 
 function clearPreview() {
-    previewCells.forEach(cell => {
-        cell.classList.remove('preview');
-        const row = parseInt(cell.dataset.row);
-        const col = parseInt(cell.dataset.col);
-        updateCellAppearance(cell, gridData.grids[currentFloor][row][col]);
-    });
-    previewCells.clear();
+    renderGrid(gridData.buffered_grids[currentFloor]);
+}
+
+function handleMouseDown(e) {
+    isMouseDown = true;
+    const { row, col } = getCellCoordinates(e);
+    startPainting({ target: { dataset: { row, col } } });
 }
 
 function handleMouseMove(e) {
-    if (isPainting) {
-        paint(e);
+    const { row, col } = getCellCoordinates(e);
+    if (isMouseDown) {
+        paint({ target: { dataset: { row, col } } });
     } else {
-        showPreview(e);
+        showPreview({ target: { dataset: { row, col } } });
     }
 }
 
-function handleMouseLeave() {
-    clearPreview();
+function handleMouseUp() {
     stopPainting();
 }
 
+function handleMouseLeave(){
+    stopPainting();
+}
+
+function getCellCoordinates(e) {
+    const rect = e.target.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const col = Math.floor(x / cellSize);
+    const row = Math.floor(y / cellSize);
+    return { row, col };
+}
 
 
 document.getElementById('fill-tool').addEventListener('click', () => currentTool = 'fill');
@@ -523,7 +535,10 @@ function updateBufferForPaintedCells() {
             floor: currentFloor,
             affected_cells: affectedCells,
             wall_buffer: wallBuffer,
-            grid: gridData.grids[currentFloor]
+            grids: gridData.grids,
+            grid_size:gridData.grid_size,
+            floors:gridData.floors,
+            bbox:gridData.bbox
         })
     })
     .then(response => response.json())

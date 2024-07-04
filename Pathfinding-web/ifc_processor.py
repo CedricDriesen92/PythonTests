@@ -37,7 +37,7 @@ def calculate_bounding_box_and_floors(ifc_file):
             for i in range(3):
                 bbox['min_' + 'xyz'[i]] = min(bbox['min_' + 'xyz'[i]], matrix[i][3])
                 bbox['max_' + 'xyz'[i]] = max(bbox['max_' + 'xyz'[i]], matrix[i][3])
-    print("PROGRESS:10:Bounding box calculated..." + str(bbox))
+    print("PROGRESS:10:Bounding box calculated...")
     # Use IfcBuildingStorey for initial floor detection
     for item in ifc_file.by_type("IfcBuildingStorey"):
         elevation = item.Elevation

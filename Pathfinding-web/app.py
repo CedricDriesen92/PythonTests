@@ -52,7 +52,12 @@ def apply_wall_buffer_route():
 @app.route('/update-buffer', methods=['POST'])
 def update_buffer():
     data = request.json
-    updated_floor = pathfinder.update_buffer_for_cells(data['floor'], data['affected_cells'], data['wall_buffer'])
+    global pathfinder
+    pathfinder = InteractiveBIMPathfinder(data['grids'], data['grid_size'], data['floors'], data['bbox'])
+    pathfinder.grids = data['grids']
+    pathfinder.wall_buffer = data['wall_buffer']
+    buffered_grids = pathfinder.apply_wall_buffer()
+    updated_floor = buffered_grids[data['floor']]#pathfinder.update_buffer_for_cells(data['floor'], data['affected_cells'], data['wall_buffer'])
     return jsonify({'updated_floor': updated_floor.tolist()})
 
 def apply_wall_buffer(grid, buffer_distance):
@@ -126,7 +131,7 @@ def process_ifc(file_path, grid_size):
         except Exception as e:
             print(f"Exception occurred: {str(e)}")
             yield f"data: {json.dumps({'error': f'An unexpected error occurred: {str(e)}'})}\n\n"
-
+    
     return Response(event_stream(), content_type='text/event-stream')
 
 

@@ -83,8 +83,10 @@ class InteractiveBIMPathfinder:
     def apply_wall_buffer(self):
         self.buffered_grids = []
         for floor in self.grids:
-            buffered_floor = floor.copy()
-            wall_mask = (floor == 'wall')
+            #print(floor)
+            buffered_floor = np.array(floor).copy()
+            wall_mask = np.array(floor) == "wall"
+            #print(wall_mask)
 
             buffer_distance = int(self.wall_buffer / self.grid_size)
 
@@ -93,10 +95,24 @@ class InteractiveBIMPathfinder:
             rows, cols = wall_mask.shape
             for i in range(rows):
                 for j in range(cols):
-                    if wall_mask[i, j] and floor[i, j] not in ['wall', 'door', 'stair']:
+                    if wall_mask[i, j] and buffered_floor[i, j] not in ['wall', 'door', 'stair']:
                         buffered_floor[i, j] = 'walla'
             self.buffered_grids.append(buffered_floor)
         return self.buffered_grids
+
+    def expand_mask(self, mask):
+        if not isinstance(mask, np.ndarray):
+            return mask
+        expanded = mask.copy()
+        rows, cols = mask.shape
+        for i in range(rows):
+            for j in range(cols):
+                if mask[i, j]:
+                    for di in [-1, 0, 1]:
+                        for dj in [-1, 0, 1]:
+                            if 0 <= i + di < rows and 0 <= j + dj < cols:
+                                expanded[i + di, j + dj] = True
+        return expanded
 
     def update_buffer_for_cells(self, floor, affected_cells, wall_buffer):
         buffered_floor = self.buffered_grids[floor].copy()
@@ -123,18 +139,6 @@ class InteractiveBIMPathfinder:
 
         self.buffered_grids[floor] = buffered_floor
         return buffered_floor
-
-    def expand_mask(self, mask):
-        expanded = mask.copy()
-        rows, cols = mask.shape
-        for i in range(rows):
-            for j in range(cols):
-                if mask[i, j]:
-                    for di in [-1, 0, 1]:
-                        for dj in [-1, 0, 1]:
-                            if 0 <= i + di < rows and 0 <= j + dj < cols:
-                                expanded[i + di, j + dj] = True
-        return expanded
 
     def grid_to_numeric(self, grid):
         element_types = ['empty', 'wall', 'door', 'stair', 'floor', 'walla']
