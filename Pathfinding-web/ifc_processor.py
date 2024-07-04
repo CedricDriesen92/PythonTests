@@ -3,6 +3,7 @@ import traceback
 
 import ifcopenshell
 import ifcopenshell.geom
+import ifcopenshell.util.placement
 import numpy as np
 import json
 import tkinter as tk
@@ -28,29 +29,15 @@ def calculate_bounding_box_and_floors(ifc_file):
         'min_x': float('inf'), 'min_y': float('inf'), 'min_z': float('inf'),
         'max_x': float('-inf'), 'max_y': float('-inf'), 'max_z': float('-inf')
     }
-
     floor_elevations = set()
-
-    all_items = ifc_file.by_type("IfcProduct")
-    num_items = len(all_items)
-    # Process all elements to find the actual min and max Z values
-    for current_item, item in enumerate(all_items, 1):
-        if item.Representation:
-            print(f"PROGRESS:{5+20*(current_item/num_items)}:Calculating bounding box {current_item} out of {num_items}")
-            try:
-                shape = ifcopenshell.geom.create_shape(settings, item)
-                verts = shape.geometry.verts
-                for i in range(0, len(verts), 3):
-                    x, y, z = verts[i:i + 3]
-                    bbox['min_x'] = min(bbox['min_x'], x)
-                    bbox['min_y'] = min(bbox['min_y'], y)
-                    bbox['min_z'] = min(bbox['min_z'], z)
-                    bbox['max_x'] = max(bbox['max_x'], x)
-                    bbox['max_y'] = max(bbox['max_y'], y)
-                    bbox['max_z'] = max(bbox['max_z'], z)
-            except RuntimeError:
-                pass
-
+    
+    for building in ifc_file.by_type('IfcProduct'):
+        if building.ObjectPlacement:
+            matrix = ifcopenshell.util.placement.get_local_placement(building.ObjectPlacement)
+            for i in range(3):
+                bbox['min_' + 'xyz'[i]] = min(bbox['min_' + 'xyz'[i]], matrix[i][3])
+                bbox['max_' + 'xyz'[i]] = max(bbox['max_' + 'xyz'[i]], matrix[i][3])
+    print("PROGRESS:10:Bounding box calculated..." + str(bbox))
     # Use IfcBuildingStorey for initial floor detection
     for item in ifc_file.by_type("IfcBuildingStorey"):
         elevation = item.Elevation
@@ -61,9 +48,10 @@ def calculate_bounding_box_and_floors(ifc_file):
 
     # If no floors detected or unusual elevations, create floors based on bounding box
     if not floor_elevations or min(floor_elevations) < bbox['min_z'] or max(floor_elevations) > bbox['max_z']:
+        print("PROGRESS:0:Floor elevation issues...")
         num_floors = max(1, int((bbox['max_z'] - bbox['min_z']) / 3))  # Assume 3m floor height
         floor_elevations = np.linspace(bbox['min_z'], bbox['max_z'], num_floors + 1)[:-1]
-
+    print("PROGRESS:12:Floor elevations calculated...")
     floors = []
     for i, e in enumerate(floor_elevations):
         if i < len(floor_elevations) - 1:
@@ -78,7 +66,7 @@ def calculate_bounding_box_and_floors(ifc_file):
     if not floors:
         print("Warning: No valid floors found. Creating a single floor based on bounding box.")
         floors = [{'elevation': bbox['min_z'], 'height': bbox['max_z'] - bbox['min_z']}]
-
+    print("PROGRESS:14:Floors created...")
     return bbox, floors
 
 
