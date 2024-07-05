@@ -1,4 +1,6 @@
-let gridData = null;
+// State variables
+let originalGridData = null;
+let bufferedGridData = null;
 let currentFloor = 0;
 let currentType = 'wall';
 let currentTool = 'paint';
@@ -7,6 +9,7 @@ let goals = [];
 let cellSize = 20;
 let isPainting = false;
 let minZoom = 1;
+let zoomLevel = 10000;
 let brushSize = 1;
 let lastPaintedCell = null;
 let lastPreviewCell = null;
@@ -15,187 +18,182 @@ let isMouseDown = false;
 let wallBuffer = 0;
 let paintedCells = new Set();
 
+// DOM elements
+const gridContainer = document.getElementById('grid-container');
+const progressContainer = document.getElementById('progress-container');
+const progressBar = document.getElementById('progress-bar');
+const progressText = document.getElementById('progress-text');
+const fileUploadForm = document.getElementById('file-upload-form');
+const zoomSlider = document.getElementById('zoom-slider');
+const brushSizeSlider = document.getElementById('brush-size');
+const wallBufferSlider = document.getElementById('wall-buffer');
 
-function uploadFile(event) {
+// Event listeners
+fileUploadForm.addEventListener('submit', uploadFile);
+zoomSlider.addEventListener('input', handleZoomChange);
+brushSizeSlider.addEventListener('input', handleBrushSizeChange);
+wallBufferSlider.addEventListener('input', handleWallBufferChange);
+gridContainer.addEventListener('mousedown', handleMouseDown);
+gridContainer.addEventListener('mousemove', handleMouseMove);
+gridContainer.addEventListener('mouseup', handleMouseUp);
+gridContainer.addEventListener('mouseleave', handleMouseLeave);
+gridContainer.addEventListener('dragstart', (e) => e.preventDefault());
+
+document.getElementById('draw-wall').addEventListener('click', () => setCurrentType('wall'));
+document.getElementById('draw-door').addEventListener('click', () => setCurrentType('door'));
+document.getElementById('draw-stair').addEventListener('click', () => setCurrentType('stair'));
+document.getElementById('draw-floor').addEventListener('click', () => setCurrentType('floor'));
+document.getElementById('draw-empty').addEventListener('click', () => setCurrentType('empty'));
+document.getElementById('fill-tool').addEventListener('click', () => setCurrentTool('fill'));
+document.getElementById('prev-floor').addEventListener('click', navigateToPreviousFloor);
+document.getElementById('next-floor').addEventListener('click', navigateToNextFloor);
+document.getElementById('clear-floor').addEventListener('click', clearCurrentFloor);
+document.getElementById('add-floor').addEventListener('click', addNewFloor);
+document.getElementById('remove-floor').addEventListener('click', removeCurrentFloor);
+document.getElementById('set-start').addEventListener('click', () => setCurrentType('start'));
+document.getElementById('set-goal').addEventListener('click', () => setCurrentType('goal'));
+document.getElementById('find-path').addEventListener('click', findPath);
+document.getElementById('download-grid').addEventListener('click', downloadGrid);
+
+
+async function uploadFile(event) {
     event.preventDefault();
     const formData = new FormData(event.target);
 
-    const progressContainer = document.getElementById('progress-container');
-    const progressBar = document.getElementById('progress-bar');
-    const progressText = document.getElementById('progress-text');
+    showProgress('Initializing...');
 
-    progressContainer.classList.remove('hidden');
-    progressBar.style.width = '0%';
-    progressText.textContent = 'Initializing...';
+    try {
+        const response = await fetch('/api/process-file', {
+            method: 'POST',
+            body: formData
+        });
 
-    // First, send the file
-    fetch('/process-file', {
-        method: 'POST',
-        body: formData
-    }).then(response => {
         if (!response.ok) {
             throw new Error('Network response was not ok');
         }
-        // If file upload successful, start listening for progress
-        const eventSource = new EventSource('/process-file-sse');
 
-        eventSource.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            if (data.progress !== undefined) {
-                const progress = data.progress;
-                progressBar.style.width = `${progress}%`;
-                progressText.textContent = `${progress.toFixed(1)}%: ${data.message}`;
-            } else if (data.complete) {
-                eventSource.close();
-                progressContainer.classList.add('hidden');
-                // Handle the completed data
-                gridData = data.result;
-                initializeGrid();
-                document.getElementById('grid-editor').classList.remove('hidden');
-                document.getElementById('pathfinder').classList.remove('hidden');
-                updateFloorDisplay();
-            } else if (data.error) {
-                eventSource.close();
-                progressContainer.classList.add('hidden');
-                console.error('Processing error:', data.error);
-                alert(`An error occurred while processing the file: ${data.error}`);
-            }
-        };
-
-        eventSource.onerror = function(error) {
-            console.error('EventSource failed:', error);
-            eventSource.close();
-            progressContainer.classList.add('hidden');
-            alert('An error occurred while processing the file.');
-        };
-    }).catch(error => {
+        const result = await response.json();
+        handleProcessedData(result);
+    } catch (error) {
         console.error('Error:', error);
-        progressContainer.classList.add('hidden');
-        alert('An error occurred while uploading the file.');
-    });
+        showError('An error occurred while processing the file.');
+    } finally {
+        hideProgress();
+    }
 }
 
-document.getElementById('file-upload-form').addEventListener('submit', uploadFile);
+function handleProcessedData(data) {
+    originalGridData = data;
+    bufferedGridData = {...data};
+    initializeGrid();
+    showGridEditor();
+}
 
 function initializeGrid() {
-    const container = document.getElementById('grid-container');
-    const containerWidth = container.clientWidth;
-    const containerHeight = container.clientHeight;
-    const gridWidth = gridData.grids[0][0].length;
-    const gridHeight = gridData.grids[0].length;
-    // After loading initial grid data
-    gridData.buffered_grids = gridData.grids;
-    updateBufferForPaintedCells();
+    const containerWidth = gridContainer.clientWidth;
+    const containerHeight = gridContainer.clientHeight;
+    const gridWidth = bufferedGridData.grids[0][0].length;
+    const gridHeight = bufferedGridData.grids[0].length;
 
-    console.log(`Container: ${containerWidth}x${containerHeight}, Grid: ${gridWidth}x${gridHeight}`);
+    const horizontalZoom = containerWidth / gridWidth;
+    const verticalZoom = containerHeight / gridHeight;
+    minZoom = Math.min(horizontalZoom, verticalZoom);
 
-    minZoom = Math.max(1, Math.min(containerWidth / gridWidth, containerHeight / gridHeight));
-    cellSize = minZoom;
+    zoomLevel = 2000//Math.max(100, Math.min(25000, Math.round(minZoom * 100)));
+    cellSize = (zoomLevel / 100) * bufferedGridData.grid_size;
 
-    console.log(`minZoom: ${minZoom}, initial cellSize: ${cellSize}`);
-
-    const zoomSlider = document.getElementById('zoom-slider');
-    zoomSlider.min = 100;  // Minimum 10% zoom
-    zoomSlider.max = 2000; // Maximum 200% zoom
-    zoomSlider.value = 1000; // Start at 100% zoom
-    zoomPercentage = zoomSlider.value;
-    cellSize = (zoomPercentage / 100) * minZoom;
-
+    zoomSlider.value = zoomLevel;
     updateZoomLevel();
-    renderGrid(gridData.buffered_grids[currentFloor]);
+    renderGrid(bufferedGridData.grids[currentFloor]);
+    updateFloorDisplay();
 }
 
 function renderGrid(grid) {
-    const container = document.getElementById('grid-container');
-    container.innerHTML = '';
-
+    gridContainer.innerHTML = '';
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    const gridWidth = grid[0].length;
-    const gridHeight = grid.length;
+    canvas.width = grid[0].length * cellSize;
+    canvas.height = grid.length * cellSize;
 
-    canvas.width = gridWidth * cellSize;
-    canvas.height = gridHeight * cellSize;
-
-    // Set canvas size
-    canvas.style.width = `${gridWidth * cellSize}px`;
-    canvas.style.height = `${gridHeight * cellSize}px`;
-
-    // Draw grid
     grid.forEach((row, i) => {
         row.forEach((cell, j) => {
             ctx.fillStyle = getCellColor(cell);
             ctx.fillRect(j * cellSize, i * cellSize, cellSize, cellSize);
-
-            // Draw cell border
-            //ctx.strokeStyle = '#e5e7eb'; // border-gray-300 equivalent
-            //ctx.strokeRect(j * cellSize, i * cellSize, cellSize, cellSize);
         });
     });
 
-    container.appendChild(canvas);
-
-    // Add event listeners
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
+    gridContainer.appendChild(canvas);
 }
 
 function getCellColor(cellType) {
-    switch (cellType) {
-        case 'wall': return '#000000';
-        case 'door': return '#f97316';
-        case 'stair': return '#ef4444';
-        case 'floor': return '#fbcfe8';
-        case 'walla': return '#9ca3af';
-        default: return '#ffffff';
+    const colors = {
+        'wall': '#000000',
+        'door': '#f97316',
+        'stair': '#ef4444',
+        'floor': '#fbcfe8',
+        'walla': '#9ca3af',
+        'empty': '#ffffff'
+    };
+    return colors[cellType] || '#ffffff';
+}
+
+function handleMouseDown(e) {
+    isMouseDown = true;
+    const { row, col } = getCellCoordinates(e);
+    startPainting(row, col);
+}
+
+function handleMouseMove(e) {
+    const { row, col } = getCellCoordinates(e);
+    if (isMouseDown) {
+        paint(row, col);
+    } else {
+        showPreview(row, col);
     }
 }
 
-function updateCellAppearance(row, col, cellType) {
-    const canvas = document.querySelector('#grid-container canvas');
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = getCellColor(cellType);
-    ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
-    ctx.strokeStyle = '#e5e7eb';
-    ctx.strokeRect(col * cellSize, row * cellSize, cellSize, cellSize);
+function handleMouseUp() {
+    stopPainting();
 }
 
-function startPainting(e) {
+function handleMouseLeave() {
+    stopPainting();
+}
+
+function startPainting(row, col) {
     isPainting = true;
-    isMouseDown = true;
     lastPaintedCell = null;
     clearPreview();
-    paint(e);
+    paint(row, col);
 }
 
 function stopPainting() {
-    gridData.buffered_grids = gridData.grids;
     isPainting = false;
     isMouseDown = false;
     lastPreviewCell = lastPaintedCell;
     lastPaintedCell = null;
     if (paintedCells.size > 0) {
-        updateBufferForPaintedCells();
+        const updates = Array.from(paintedCells).map(coord => {
+            const [row, col] = coord.split(',').map(Number);
+            return { floor: currentFloor, row, col, type: originalGridData.grids[currentFloor][row][col] };
+        });
+        batchUpdateCells(updates).then(() => {
+            paintedCells.clear();
+            renderGrid(bufferedGridData.grids[currentFloor]);
+        });
     }
 }
 
-function paint(e) {
+function paint(row, col) {
     clearPreview();
-    const row = parseInt(e.target.dataset.row);
-    const col = parseInt(e.target.dataset.col);
 
     if (currentType === 'start') {
         start = { floor: currentFloor, row, col };
-        renderGrid(gridData.grids[currentFloor]);
     } else if (currentType === 'goal') {
         goals.push({ floor: currentFloor, row, col });
-        renderGrid(gridData.grids[currentFloor]);
     } else if (currentTool === 'fill') {
-        floodFill(currentFloor, row, col, gridData.grids[currentFloor][row][col]);
-        renderGrid(gridData.grids[currentFloor]);
+        floodFill(currentFloor, row, col, originalGridData.grids[currentFloor][row][col]);
     } else {
         paintWithBrush(row, col);
         if (lastPaintedCell) {
@@ -204,29 +202,32 @@ function paint(e) {
     }
 
     lastPaintedCell = { row, col };
-    showPreview(e);
+    renderGrid(bufferedGridData.grids[currentFloor]);
+    showPreview(row, col);
 }
 
 function paintWithBrush(centerRow, centerCol) {
+    const updates = [];
     const halfSize = Math.floor(brushSize / 2);
     for (let i = 0; i < brushSize; i++) {
         for (let j = 0; j < brushSize; j++) {
             const row = centerRow - halfSize + i;
             const col = centerCol - halfSize + j;
-            if (row >= 0 && row < gridData.grids[currentFloor].length &&
-                col >= 0 && col < gridData.grids[currentFloor][0].length) {
-                gridData.grids[currentFloor][row][col] = currentType;
-                paintedCells.add(`${row},${col}`);
-                const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                if (cell) {
-                    updateCellAppearance(cell, currentType);
+            if (isValidCell(row, col)) {
+                if (originalGridData.grids[currentFloor][row][col] != currentType){
+                    originalGridData.grids[currentFloor][row][col] = currentType;
+                    bufferedGridData.grids[currentFloor][row][col] = currentType;
+                    updates.push({ floor: currentFloor, row, col, type: currentType });
+                    paintedCells.add(`${row},${col}`);
                 }
             }
         }
     }
+    return updates;
 }
 
 function interpolatePaint(startRow, startCol, endRow, endCol) {
+    const updates = [];
     const dx = Math.abs(endCol - startCol);
     const dy = Math.abs(endRow - startRow);
     const sx = startCol < endCol ? 1 : -1;
@@ -234,7 +235,7 @@ function interpolatePaint(startRow, startCol, endRow, endCol) {
     let err = dx - dy;
 
     while (true) {
-        paintWithBrush(startRow, startCol);
+        updates.push(...paintWithBrush(startRow, startCol));
 
         if (startRow === endRow && startCol === endCol) break;
         const e2 = 2 * err;
@@ -247,61 +248,39 @@ function interpolatePaint(startRow, startCol, endRow, endCol) {
             startRow += sy;
         }
     }
+    return updates;
 }
 
 function floodFill(floor, row, col, targetElement) {
-    if (row < 0 || row >= gridData.grids[floor].length ||
-        col < 0 || col >= gridData.grids[floor][0].length ||
-        gridData.grids[floor][row][col] !== targetElement ||
-        targetElement === currentType) {
-        return;
+    const updates = [];
+    const stack = [[row, col]];
+    const seen = new Set();
+
+    while (stack.length > 0) {
+        const [r, c] = stack.pop();
+        const key = `${r},${c}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        if (!isValidCell(r, c) || originalGridData.grids[floor][r][c] !== targetElement || targetElement === currentType) {
+            continue;
+        }
+
+        originalGridData.grids[floor][r][c] = currentType;
+        updates.push({ floor, row: r, col: c, type: currentType });
+
+        stack.push([r+1, c], [r-1, c], [r, c+1], [r, c-1]);
     }
-    tempSize = brushSize;
-    paintWithBrush(row, col);
-    brushSize = tempSize;
-    floodFill(floor, row + 1, col, targetElement);
-    floodFill(floor, row - 1, col, targetElement);
-    floodFill(floor, row, col + 1, targetElement);
-    floodFill(floor, row, col - 1, targetElement);
+
+    return updates;
 }
 
-document.getElementById('draw-wall').addEventListener('click', () => {currentType = 'wall'; currentTool = 'paint'});
-document.getElementById('draw-door').addEventListener('click', () => {currentType = 'door'; currentTool = 'paint'});
-document.getElementById('draw-stair').addEventListener('click', () => {currentType = 'stair'; currentTool = 'paint'});
-document.getElementById('draw-floor').addEventListener('click', () => {currentType = 'floor'; currentTool = 'paint'});
-document.getElementById('draw-empty').addEventListener('click', () => {currentType = 'empty'; currentTool = 'paint'});
-
-document.getElementById('prev-floor').addEventListener('click', () => {
-    if (currentFloor > 0) {
-        currentFloor--;
-        updateBufferForPaintedCells();
-        renderGrid(gridData.buffered_grids[currentFloor]);
-        updateFloorDisplay();
-    }
-});
-
-
-document.getElementById('next-floor').addEventListener('click', () => {
-    if (currentFloor < gridData.grids.length - 1) {
-        currentFloor++;
-        updateBufferForPaintedCells();
-        renderGrid(gridData.buffered_grids[currentFloor]);
-        updateFloorDisplay();
-    }
-});
-
-function showPreview(e) {
+function showPreview(row, col) {
     if (currentTool !== 'paint' || currentType === 'start' || currentType === 'goal') return;
 
-    const row = parseInt(e.target.dataset.row);
-    const col = parseInt(e.target.dataset.col);
-
     clearPreview();
-
-    // Show brush preview
     previewBrush(row, col);
 
-    // Show interpolation preview only if brush size is 1 and there's a last preview cell
     if (brushSize === 1 && lastPreviewCell) {
         previewInterpolation(lastPreviewCell.row, lastPreviewCell.col, row, col);
     }
@@ -345,7 +324,8 @@ function previewInterpolation(startRow, startCol, endRow, endCol) {
 }
 
 function previewCell(row, col) {
-    const canvas = document.querySelector('#grid-container canvas');
+    if (!isValidCell(row, col)) return;
+    const canvas = gridContainer.querySelector('canvas');
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = getCellColor(currentType);
     ctx.globalAlpha = 0.5;
@@ -354,30 +334,7 @@ function previewCell(row, col) {
 }
 
 function clearPreview() {
-    renderGrid(gridData.buffered_grids[currentFloor]);
-}
-
-function handleMouseDown(e) {
-    isMouseDown = true;
-    const { row, col } = getCellCoordinates(e);
-    startPainting({ target: { dataset: { row, col } } });
-}
-
-function handleMouseMove(e) {
-    const { row, col } = getCellCoordinates(e);
-    if (isMouseDown) {
-        paint({ target: { dataset: { row, col } } });
-    } else {
-        showPreview({ target: { dataset: { row, col } } });
-    }
-}
-
-function handleMouseUp() {
-    stopPainting();
-}
-
-function handleMouseLeave(){
-    stopPainting();
+    renderGrid(bufferedGridData.grids[currentFloor]);
 }
 
 function getCellCoordinates(e) {
@@ -389,117 +346,130 @@ function getCellCoordinates(e) {
     return { row, col };
 }
 
+function isValidCell(row, col) {
+    return row >= 0 && row < bufferedGridData.grids[currentFloor].length &&
+           col >= 0 && col < bufferedGridData.grids[currentFloor][0].length;
+}
 
-document.getElementById('fill-tool').addEventListener('click', () => currentTool = 'fill');
+function setCurrentType(type) {
+    currentType = type;
+    currentTool = 'paint';
+}
 
-document.getElementById('clear-floor').addEventListener('click', () => {
-    gridData.grids[currentFloor] = gridData.grids[currentFloor].map(row => row.map(() => 'empty'));
-    renderGrid(gridData.grids[currentFloor]);
-});
+function setCurrentTool(tool) {
+    currentTool = tool;
+}
 
-document.getElementById('add-floor').addEventListener('click', () => {
-    const newFloor = gridData.grids[currentFloor].map(row => row.map(() => 'empty'));
-    gridData.grids.push(newFloor);
-    gridData.floors.push({
-        elevation: gridData.floors[gridData.floors.length - 1].elevation + gridData.floors[gridData.floors.length - 1].height,
-        height: gridData.floors[gridData.floors.length - 1].height
+function navigateToPreviousFloor() {
+    if (currentFloor > 0) {
+        currentFloor--;
+        renderGrid(bufferedGridData.grids[currentFloor]);
+        updateFloorDisplay();
+    }
+}
+
+function navigateToNextFloor() {
+    if (currentFloor < bufferedGridData.grids.length - 1) {
+        currentFloor++;
+        renderGrid(bufferedGridData.grids[currentFloor]);
+        updateFloorDisplay();
+    }
+}
+
+async function clearCurrentFloor() {
+    const updates = [];
+    for (let row = 0; row < originalGridData.grids[currentFloor].length; row++) {
+        for (let col = 0; col < originalGridData.grids[currentFloor][row].length; col++) {
+            originalGridData.grids[currentFloor][row][col] = 'empty';
+            updates.push({ floor: currentFloor, row, col, type: 'empty' });
+        }
+    }
+    await batchUpdateCells(updates);
+    renderGrid(bufferedGridData.grids[currentFloor]);
+}
+
+async function addNewFloor() {
+    const newFloor = originalGridData.grids[currentFloor].map(row => row.map(() => 'empty'));
+    originalGridData.grids.push(newFloor);
+    originalGridData.floors.push({
+        elevation: originalGridData.floors[originalGridData.floors.length - 1].elevation + originalGridData.floors[originalGridData.floors.length - 1].height,
+        height: originalGridData.floors[originalGridData.floors.length - 1].height
     });
-    currentFloor = gridData.grids.length - 1;
-    renderGrid(gridData.grids[currentFloor]);
+    await applyWallBuffer();
+    currentFloor = bufferedGridData.grids.length - 1;
+    renderGrid(bufferedGridData.grids[currentFloor]);
     updateFloorDisplay();
-});
+}
 
-document.getElementById('remove-floor').addEventListener('click', () => {
-    if (gridData.grids.length > 1) {
-        gridData.grids.pop();
-        gridData.floors.pop();
-        currentFloor = Math.min(currentFloor, gridData.grids.length - 1);
-        renderGrid(gridData.grids[currentFloor]);
+async function removeCurrentFloor() {
+    if (bufferedGridData.grids.length > 1) {
+        originalGridData.grids.splice(currentFloor, 1);
+        originalGridData.floors.splice(currentFloor, 1);
+        await applyWallBuffer();
+        currentFloor = Math.min(currentFloor, bufferedGridData.grids.length - 1);
+        renderGrid(bufferedGridData.grids[currentFloor]);
         updateFloorDisplay();
     } else {
-        alert('Cannot remove the last floor.');
+        showError('Cannot remove the last floor.');
     }
-});
-
-document.getElementById('brush-size').addEventListener('input', (e) => {
-    brushSize = parseInt(e.target.value);
-    document.getElementById('brush-size-display').textContent = brushSize;
-});
-
-document.getElementById('zoom-slider').addEventListener('input', (e) => {
-    const zoomPercentage = parseInt(e.target.value);
-    cellSize = (zoomPercentage / 100) * minZoom;
-    console.log(`Zoom slider value: ${zoomPercentage}, new cellSize: ${cellSize}`);
-    updateZoomLevel();
-    renderGrid(gridData.grids[currentFloor]);
-});
-
-function updateZoomLevel() {
-    const zoomPercentage = Math.round((cellSize / minZoom) * 100);
-    console.log(`Updating zoom level: cellSize=${cellSize}, minZoom=${minZoom}, zoomPercentage=${zoomPercentage}`);
-    document.getElementById('zoom-level').textContent = `${zoomPercentage/10}%`;
 }
 
-function updateFloorDisplay() {
-    document.getElementById('current-floor').textContent = `Floor: ${currentFloor + 1} / ${gridData.grids.length}`;
-}
-
-document.getElementById('set-start').addEventListener('click', () => currentType = 'start');
-document.getElementById('set-goal').addEventListener('click', () => currentType = 'goal');
-
-document.getElementById('find-path').addEventListener('click', async () => {
+async function findPath() {
     if (!start || goals.length === 0) {
-        alert('Please set start and at least one goal.');
+        showError('Please set start and at least one goal.');
         return;
     }
 
     try {
-        const response = await fetch('/find-path', {
+        const response = await fetch('/api/find-path', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                grids: gridData.grids,
-                grid_size: gridData.grid_size,
-                floors: gridData.floors,
-                bbox: gridData.bbox,
+                grids: bufferedGridData.grids,
+                grid_size: bufferedGridData.grid_size,
+                floors: bufferedGridData.floors,
+                bbox: bufferedGridData.bbox,
                 start: start,
                 goals: goals
             })
         });
         const data = await response.json();
-        document.getElementById('result').innerHTML = `<pre>${JSON.stringify(data.path, null, 2)}</pre>`;
-
+        displayPathResult(data.path);
         highlightPath(data.path);
     } catch (error) {
         console.error('Error:', error);
-        alert('An error occurred while finding the path.');
+        showError('An error occurred while finding the path.');
     }
-});
+}
+
+function displayPathResult(path) {
+    document.getElementById('result').innerHTML = `<pre>${JSON.stringify(path, null, 2)}</pre>`;
+}
 
 function highlightPath(path) {
+    const canvas = gridContainer.querySelector('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
     path.forEach(point => {
         if (point[2] === currentFloor) {
-            const cell = document.querySelector(`[data-row="${point[0]}"][data-col="${point[1]}"]`);
-            if (cell) {
-                cell.classList.add('bg-yellow-300');
-            }
+            ctx.fillRect(point[1] * cellSize, point[0] * cellSize, cellSize, cellSize);
         }
     });
 }
 
 function downloadGrid() {
-    if (!gridData) {
-        alert('No grid data available. Please upload or create a grid first.');
+    if (!originalGridData) {
+        showError('No grid data available. Please upload or create a grid first.');
         return;
     }
 
     const dataToSave = {
-        grids: gridData.grids,
-        grid_size: gridData.grid_size,
-        floors: gridData.floors,
-        bbox: gridData.bbox
+        grids: originalGridData.grids,
+        grid_size: originalGridData.grid_size,
+        floors: originalGridData.floors,
+        bbox: originalGridData.bbox
     };
 
     const jsonString = JSON.stringify(dataToSave, null, 2);
@@ -517,63 +487,185 @@ function downloadGrid() {
     URL.revokeObjectURL(url);
 }
 
-document.getElementById('wall-buffer').addEventListener('input', (e) => {
-    wallBuffer = parseInt(e.target.value);
-    document.getElementById('wall-buffer-display').textContent = wallBuffer;
-    updateWallBuffer(wallBuffer);
-});
-
 function updateBufferForPaintedCells() {
-    //const affectedCells = Array.from(paintedCells).map(coord => coord.split(',').map(Number));
-    affectedCells = [0];
-    fetch('/update-buffer', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            floor: currentFloor,
-            affected_cells: affectedCells,
-            wall_buffer: wallBuffer,
-            grids: gridData.grids,
-            grid_size:gridData.grid_size,
-            floors:gridData.floors,
-            bbox:gridData.bbox
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        gridData.buffered_grids[currentFloor] = data.updated_floor;
-        renderGrid(gridData.buffered_grids[currentFloor]);
-        paintedCells.clear();
-    })
-    .catch(error => console.error('Error:', error));
+    // This function should now use applyWallBuffer
+    applyWallBuffer();
 }
 
-function updateWallBuffer(newBufferValue) {
-    fetch('/apply-wall-buffer', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            grids: gridData.grids,
-            wall_buffer: newBufferValue
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        gridData.buffered_grids = data.buffered_grids;
-        renderGrid(gridData.buffered_grids[currentFloor]);
-    })
-    .catch(error => console.error('Error:', error));
+async function applyWallBuffer() {
+    if (!Array.isArray(originalGridData.grids) || !originalGridData.grids.every(Array.isArray)) {
+        console.error('Invalid grid data structure', originalGridData.grids);
+        showError('Invalid grid data structure. Please refresh the page and try again.');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/apply-wall-buffer', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                grids: originalGridData.grids,
+                wall_buffer: wallBuffer,
+                grid_size: originalGridData.grid_size,
+                floors: originalGridData.floors,
+                bbox: originalGridData.bbox
+            })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            if (Array.isArray(data.buffered_grids) && data.buffered_grids.every(Array.isArray)) {
+                bufferedGridData = {...originalGridData, grids: data.buffered_grids};
+                renderGrid(bufferedGridData.grids[currentFloor]);
+            } else {
+                console.error('Received invalid grid data from server', data.buffered_grids);
+                showError('Received invalid data from server. Please try again.');
+            }
+        } else {
+            throw new Error(data.error || 'An error occurred while applying the wall buffer.');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showError('An error occurred while applying the wall buffer.');
+    }
 }
 
-// Prevent dragging on the grid container
-document.getElementById('grid-container').addEventListener('dragstart', (e) => e.preventDefault());
+async function updateCell(floor, row, col, cellType) {
+    try {
+        const response = await fetch('/api/update-cell', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                grids: originalGridData.grids,
+                floor: floor,
+                row: row,
+                col: col,
+                cell_type: cellType,
+                wall_buffer: wallBuffer,
+                grid_size: originalGridData.grid_size,
+                floors: originalGridData.floors,
+                bbox: originalGridData.bbox
+            })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            originalGridData.grids = data.original_grids;
+            bufferedGridData = {...originalGridData, grids: data.buffered_grids};
+        } else {
+            throw new Error(data.error || 'An error occurred while updating the cell.');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showError('An error occurred while updating the cell.');
+    }
+}
 
-// Stop painting when mouse leaves the grid
-document.getElementById('grid-container').addEventListener('mouseleave', stopPainting);
+async function batchUpdateCells(updates) {
+    try {
+        const response = await fetch('/api/batch-update-cells', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                grids: originalGridData.grids,
+                updates: updates,
+                wall_buffer: wallBuffer,
+                grid_size: originalGridData.grid_size,
+                floors: originalGridData.floors,
+                bbox: originalGridData.bbox
+            })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            originalGridData.grids = data.original_grids;
+            bufferedGridData = {...originalGridData, grids: data.buffered_grids};
+        } else {
+            throw new Error(data.error || 'An error occurred while updating cells.');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showError('An error occurred while updating cells.');
+    }
+}
 
-document.getElementById('download-grid').addEventListener('click', downloadGrid);
+function handleProcessedData(data) {
+    originalGridData = data;
+    bufferedGridData = {...data};
+    initializeGrid();
+    showGridEditor();
+}
 
+function handleZoomChange(e) {
+    zoomLevel = parseInt(e.target.value);
+    cellSize = (zoomLevel / 100) * bufferedGridData.grid_size;
+    updateZoomLevel();
+    renderGrid(bufferedGridData.grids[currentFloor]);
+}
+
+function updateZoomLevel() {
+    document.getElementById('zoom-level').textContent = `${zoomLevel/100}%`;
+}
+
+function handleBrushSizeChange(e) {
+    brushSize = parseInt(e.target.value);
+    document.getElementById('brush-size-display').textContent = brushSize;
+}
+
+function handleWallBufferChange(e) {
+    wallBuffer = parseInt(e.target.value);
+    const actualBufferSize = wallBuffer * bufferedGridData.grid_size;
+    document.getElementById('wall-buffer-display').textContent = actualBufferSize.toFixed(2);
+    applyWallBuffer();
+}
+
+function updateFloorDisplay() {
+    document.getElementById('current-floor').textContent = `Floor: ${currentFloor + 1} / ${bufferedGridData.grids.length}`;
+}
+
+function showGridEditor() {
+    document.getElementById('grid-editor').classList.remove('hidden');
+    document.getElementById('pathfinder').classList.remove('hidden');
+}
+
+function showProgress(message) {
+    progressContainer.classList.remove('hidden');
+    progressBar.style.width = '0%';
+    progressText.textContent = message;
+}
+
+function updateProgress(percentage, message) {
+    progressBar.style.width = `${percentage}%`;
+    progressText.textContent = `${percentage.toFixed(1)}%: ${message}`;
+}
+
+function hideProgress() {
+    progressContainer.classList.add('hidden');
+}
+
+function showError(message) {
+    // You can implement a more sophisticated error display here
+    alert(message);
+}
+
+// Initialize the application
+function init() {
+    // Set initial values for sliders
+    zoomSlider.min = 100;  // 10% minimum zoom
+    zoomSlider.max = 25000; // 2000% maximum zoom
+    zoomSlider.value = zoomLevel;
+    brushSizeSlider.value = brushSize;
+    wallBufferSlider.value = wallBuffer;
+
+    // Update displays
+    document.getElementById('brush-size-display').textContent = brushSize;
+    const initialBufferSize = wallBuffer * bufferedGridData.grid_size;
+    document.getElementById('wall-buffer-display').textContent = initialBufferSize.toFixed(2);
+
+}
+
+// Call the init function when the DOM is fully loaded
+document.addEventListener('DOMContentLoaded', init);
