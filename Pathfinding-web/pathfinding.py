@@ -4,12 +4,13 @@ from typing import List, Tuple, Dict, Any
 from collections import defaultdict
 
 class Pathfinder:
-    def __init__(self, grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float], allow_diagonal: bool = True):
+    def __init__(self, grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float], allow_diagonal: bool = True, minimize_cost: bool = True):
         self.grids = grids
         self.grid_size = grid_size
         self.floors = floors
         self.bbox = bbox
         self.allow_diagonal = allow_diagonal
+        self.minimize_cost = minimize_cost
         self.graph = self._create_graph()
 
     def _create_graph(self) -> nx.Graph:
@@ -39,13 +40,17 @@ class Pathfinder:
         return G
 
     def _get_edge_weight(self, cell_type: str, is_diagonal: bool = False) -> float:
-        weights = {
-            'empty': 1.0,
-            'floor': 1.0,
-            'door': 1.2,
-            'stair': 1.5,
-        }
-        weight = weights.get(cell_type, 1.0)
+        if self.minimize_cost:
+            weights = {
+                'empty': 1.0,
+                'floor': 1.0,
+                'door': 4,
+                'stair': 4,
+            }
+            weight = weights.get(cell_type, 1.0)
+        else:
+            weight = 1.0  # All edges have the same weight when minimizing distance
+        
         return weight * (2**0.5 if is_diagonal else 1.0)
 
     def _connect_stairs(self, G: nx.Graph):
@@ -98,9 +103,9 @@ class Pathfinder:
         return path, [{'current_path': path, 'open_set': [], 'closed_set': []}]
 
 def find_path(grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float], 
-              start: Dict[str, int], goals: List[Dict[str, int]], allow_diagonal: bool = False) -> Tuple[List[Tuple[int, int, int]], List[Dict[str, Any]]]:
+              start: Dict[str, int], goals: List[Dict[str, int]], allow_diagonal: bool = False, minimize_cost: bool = True) -> Tuple[List[Tuple[int, int, int]], List[Dict[str, Any]]]:
     try:
-        pathfinder = Pathfinder(grids, grid_size, floors, bbox, allow_diagonal)
+        pathfinder = Pathfinder(grids, grid_size, floors, bbox, allow_diagonal, minimize_cost)
         path, steps = pathfinder.find_path(start, goals)
         path_length = sum(pathfinder.graph[path[i]][path[i+1]]['weight'] for i in range(len(path)-1)) * grid_size
         return path, path_length

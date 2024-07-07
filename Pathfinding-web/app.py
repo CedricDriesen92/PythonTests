@@ -5,6 +5,7 @@ from typing import List, Dict, Tuple, Any
 from ifc_processing import process_ifc_file
 from grid_management import GridManager, validate_grid_data
 from pathfinding import find_path
+import json
 
 import logging
 import traceback
@@ -26,21 +27,31 @@ def process_file() -> tuple[Dict[str, Any], int]:
         return jsonify({'error': 'No file part'}), 400
     
     file = request.files['file']
-    if file.filename == '' or not allowed_file(file.filename):
-        return jsonify({'error': 'Invalid file'}), 400
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
     
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        if filename.lower().endswith('.json'):
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            return jsonify(data), 200
+        else:
+            grid_size = float(request.form.get('grid_size', 0.1))
+            try:
+                result = process_ifc_file(filepath, grid_size)
+                return jsonify(result), 200
+            except Exception as e:
+                app.logger.error(f"Error processing file: {str(e)}")
+                return jsonify({'error': 'An error occurred while processing the file'}), 500
     
-    grid_size = float(request.form.get('grid_size', 0.1))
-    
-    try:
-        result = process_ifc_file(filepath, grid_size)
-        return jsonify(result), 200
-    except Exception as e:
-        app.logger.error(f"Error processing file: {str(e)}")
-        return jsonify({'error': 'An error occurred while processing the file'}), 500
+    return jsonify({'error': 'Invalid file type'}), 400
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'ifc', 'json'}
 
 @app.route('/api/edit-grid', methods=['POST'])
 def edit_grid() -> tuple[Dict[str, Any], int]:
@@ -64,7 +75,8 @@ def find_path_route() -> tuple[Dict[str, Any], int]:
             data['bbox'], 
             data['start'], 
             data['goals'],
-            data.get('allow_diagonal', True)
+            data.get('allow_diagonal', True),
+            data.get('minimize_cost', True)
         )
         return jsonify({'path': path, 'path_length': path_length}), 200
     except Exception as e:

@@ -21,7 +21,8 @@ let pathfindingSteps = [];
 let currentStepIndex = 0;
 let animationInterval = null;
 let pathData = null;
-let allowDiagonal = false;
+let allowDiagonal = true;
+let minimizeCost = true;
 
 // DOM elements
 const gridContainer = document.getElementById('grid-container');
@@ -33,6 +34,8 @@ const zoomSlider = document.getElementById('zoom-slider');
 const brushSizeSlider = document.getElementById('brush-size');
 const wallBufferSlider = document.getElementById('wall-buffer');
 const allowDiagonalCheckbox = document.getElementById('allow-diagonal');
+const minimizeCostCheckbox = document.getElementById('minimize-cost');
+const exportPathButton = document.getElementById('export-path');
 
 // Event listeners
 fileUploadForm.addEventListener('submit', uploadFile);
@@ -47,6 +50,10 @@ gridContainer.addEventListener('dragstart', (e) => e.preventDefault());
 allowDiagonalCheckbox.addEventListener('change', (e) => {
 allowDiagonal = e.target.checked;
 });
+minimizeCostCheckbox.addEventListener('change', (e) => {
+    minimizeCost = e.target.checked;
+});
+exportPathButton.addEventListener('click', exportPath);
 gridContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
 document.getElementById('draw-wall').addEventListener('click', () => setCurrentType('wall'));
@@ -64,6 +71,7 @@ document.getElementById('set-start').addEventListener('click', () => setCurrentT
 document.getElementById('set-goal').addEventListener('click', () => setCurrentType('goal'));
 document.getElementById('find-path').addEventListener('click', findPath);
 document.getElementById('download-grid').addEventListener('click', downloadGrid);
+
 
 
 async function uploadFile(event) {
@@ -531,7 +539,8 @@ async function findPath() {
                 bbox: bufferedGridData.bbox,
                 start: start,
                 goals: goals,
-                allow_diagonal: allowDiagonal
+                allow_diagonal: allowDiagonal,
+                minimize_cost: minimizeCost
             })
         });
         const data = await response.json();
@@ -579,34 +588,6 @@ function highlightPath(path) {
             ctx.fill();
         }
     });
-}
-
-function downloadGrid() {
-    if (!originalGridData) {
-        showError('No grid data available. Please upload or create a grid first.');
-        return;
-    }
-
-    const dataToSave = {
-        grids: originalGridData.grids,
-        grid_size: originalGridData.grid_size,
-        floors: originalGridData.floors,
-        bbox: originalGridData.bbox
-    };
-
-    const jsonString = JSON.stringify(dataToSave, null, 2);
-    const blob = new Blob([jsonString], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-
-    const downloadLink = document.createElement('a');
-    downloadLink.href = url;
-    downloadLink.download = 'edited_grid.json';
-
-    document.body.appendChild(downloadLink);
-    downloadLink.click();
-    document.body.removeChild(downloadLink);
-
-    URL.revokeObjectURL(url);
 }
 
 function updateBufferForPaintedCells() {
@@ -773,6 +754,124 @@ function hideProgress() {
 function showError(message) {
     console.error(message);
     alert(message);  // You can replace this with a more sophisticated error display method
+}
+
+function downloadGrid() {
+    if (!originalGridData) {
+        showError('No grid data available. Please upload or create a grid first.');
+        return;
+    }
+
+    const dataToSave = {
+        grids: originalGridData.grids,
+        grid_size: originalGridData.grid_size,
+        floors: originalGridData.floors,
+        bbox: originalGridData.bbox
+    };
+
+    const jsonString = JSON.stringify(dataToSave, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = 'edited_grid.json';
+
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+
+    URL.revokeObjectURL(url);
+}
+
+function exportPath() {
+    if (!pathData || pathData.length === 0) {
+        showError('No path to export. Please find a path first.');
+        return;
+    }
+
+    const pathByFloor = {};
+    pathData.forEach(point => {
+        const [x, y, floor] = point;
+        if (!pathByFloor[floor]) {
+            pathByFloor[floor] = [];
+        }
+        pathByFloor[floor].push([x, y]);
+    });
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const floorCount = Object.keys(pathByFloor).length;
+    const padding = 20;
+    const floorHeight = (bufferedGridData.grids[0].length * cellSize) + padding;
+    
+    canvas.width = bufferedGridData.grids[0][0].length * cellSize;
+    canvas.height = floorHeight * floorCount;
+
+    Object.entries(pathByFloor).forEach(([floor, path], index) => {
+        const yOffset = index * floorHeight;
+        
+        // Draw floor label
+        ctx.fillStyle = 'black';
+        ctx.font = '16px Arial';
+        ctx.fillText(`Floor ${parseInt(floor) + 1}`, padding, yOffset + 20);
+
+        // Draw grid
+        bufferedGridData.grids[floor].forEach((row, i) => {
+            row.forEach((cell, j) => {
+                ctx.fillStyle = getCellColor(cell);
+                ctx.fillRect(j * cellSize, yOffset + i * cellSize + padding, cellSize, cellSize);
+            });
+        });
+
+        // Draw path
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        path.forEach(([x, y], i) => {
+            const canvasX = y * cellSize + cellSize / 2;
+            const canvasY = yOffset + x * cellSize + cellSize / 2 + padding;
+            if (i === 0) {
+                ctx.moveTo(canvasX, canvasY);
+            } else {
+                ctx.lineTo(canvasX, canvasY);
+            }
+        });
+        ctx.stroke();
+
+        // Draw start and end points
+        if (index === 0) {
+            ctx.fillStyle = 'green';
+            const [startX, startY] = path[0];
+            ctx.beginPath();
+            ctx.arc(startY * cellSize + cellSize / 2, yOffset + startX * cellSize + cellSize / 2 + padding, cellSize / 2, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        if (index === floorCount - 1) {
+            ctx.fillStyle = 'red';
+            const [endX, endY] = path[path.length - 1];
+            ctx.beginPath();
+            ctx.arc(endY * cellSize + cellSize / 2, yOffset + endX * cellSize + cellSize / 2 + padding, cellSize / 2, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+    });
+
+    // Add path length at the bottom
+    ctx.fillStyle = 'black';
+    ctx.font = '16px Arial';
+    ctx.fillText(`Path length: ${pathLength.toFixed(2)} meters`, padding, canvas.height - padding);
+
+    // Convert canvas to blob and download
+    canvas.toBlob(function(blob) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'path_export.png';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+    });
 }
 
 // Initialize the application
