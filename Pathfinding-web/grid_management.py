@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 class GridManager:
     def __init__(self, grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float]):
         self.grid_size = grid_size
+        #self.unit_size = unit_size
         self.floors = floors
         self.bbox = bbox
         self.current_floor = 0

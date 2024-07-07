@@ -4,9 +4,11 @@ import os
 from typing import List, Dict, Tuple, Any
 from ifc_processing import process_ifc_file
 from grid_management import GridManager, validate_grid_data
-#from pathfinding import Pathfinder
+from pathfinding import find_path
 
 import logging
+import traceback
+
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -51,16 +53,23 @@ def edit_grid() -> tuple[Dict[str, Any], int]:
         app.logger.error(f"Error editing grid: {str(e)}")
         return jsonify({'error': 'An error occurred while editing the grid'}), 500
 
-# @app.route('/api/find-path', methods=['POST'])
-# def find_path() -> tuple[Dict[str, Any], int]:
-#     data = request.json
-#     try:
-#         pathfinder = Pathfinder(data['grids'], data['grid_size'], data['floors'], data['bbox'])
-#         path = pathfinder.find_path(data['start'], data['goals'])
-#         return jsonify({'path': path}), 200
-#     except Exception as e:
-#         app.logger.error(f"Error finding path: {str(e)}")
-#         return jsonify({'error': 'An error occurred while finding the path'}), 500
+@app.route('/api/find-path', methods=['POST'])
+def find_path_route() -> tuple[Dict[str, Any], int]:
+    data = request.json
+    try:
+        path, path_length = find_path(
+            data['grids'], 
+            data['grid_size'], 
+            data['floors'], 
+            data['bbox'], 
+            data['start'], 
+            data['goals'],
+            data.get('allow_diagonal', True)
+        )
+        return jsonify({'path': path, 'path_length': path_length}), 200
+    except Exception as e:
+        app.logger.error(f"Error finding path: {str(e)}")
+        return jsonify({'error': f'An error occurred while finding the path: {str(e)}'}), 500
 
 @app.route('/api/apply-wall-buffer', methods=['POST'])
 def apply_wall_buffer() -> Tuple[Dict[str, Any], int]:

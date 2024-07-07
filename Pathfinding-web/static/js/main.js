@@ -17,6 +17,11 @@ let previewCells = new Set();
 let isMouseDown = false;
 let wallBuffer = 0;
 let paintedCells = new Set();
+let pathfindingSteps = [];
+let currentStepIndex = 0;
+let animationInterval = null;
+let pathData = null;
+let allowDiagonal = false;
 
 // DOM elements
 const gridContainer = document.getElementById('grid-container');
@@ -27,6 +32,7 @@ const fileUploadForm = document.getElementById('file-upload-form');
 const zoomSlider = document.getElementById('zoom-slider');
 const brushSizeSlider = document.getElementById('brush-size');
 const wallBufferSlider = document.getElementById('wall-buffer');
+const allowDiagonalCheckbox = document.getElementById('allow-diagonal');
 
 // Event listeners
 fileUploadForm.addEventListener('submit', uploadFile);
@@ -38,6 +44,10 @@ gridContainer.addEventListener('mousemove', handleMouseMove);
 gridContainer.addEventListener('mouseup', handleMouseUp);
 gridContainer.addEventListener('mouseleave', handleMouseLeave);
 gridContainer.addEventListener('dragstart', (e) => e.preventDefault());
+allowDiagonalCheckbox.addEventListener('change', (e) => {
+allowDiagonal = e.target.checked;
+});
+gridContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
 document.getElementById('draw-wall').addEventListener('click', () => setCurrentType('wall'));
 document.getElementById('draw-door').addEventListener('click', () => setCurrentType('door'));
@@ -85,6 +95,8 @@ async function uploadFile(event) {
 function handleProcessedData(data) {
     originalGridData = data;
     bufferedGridData = {...data};
+    originalGridData.grid_size *= originalGridData.unit_size;
+    bufferedGridData.grid_size *= bufferedGridData.unit_size;
     initializeGrid();
     showGridEditor();
 }
@@ -116,6 +128,7 @@ function renderGrid(grid) {
     canvas.width = grid[0].length * cellSize;
     canvas.height = grid.length * cellSize;
 
+    // Render the base grid
     grid.forEach((row, i) => {
         row.forEach((cell, j) => {
             ctx.fillStyle = getCellColor(cell);
@@ -123,7 +136,77 @@ function renderGrid(grid) {
         });
     });
 
+    // Render path if it exists
+    if (pathData) {
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
+        pathData.forEach(point => {
+            if (point[2] === currentFloor) {
+                ctx.fillRect(point[1] * cellSize, point[0] * cellSize, cellSize, cellSize);
+            }
+        });
+    }
+
+    // Render start point if it exists and is on the current floor
+    if (start && start.floor === currentFloor) {
+        ctx.fillStyle = 'green';
+        ctx.beginPath();
+        ctx.arc((start.col + 0.5) * cellSize, (start.row + 0.5) * cellSize, cellSize * 2, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    // Render goal points if they exist and are on the current floor
+    if (goals.length > 0) {
+        ctx.fillStyle = 'red';
+        goals.forEach(goal => {
+            if (goal.floor === currentFloor) {
+                ctx.beginPath();
+                ctx.arc((goal.col + 0.5) * cellSize, (goal.row + 0.5) * cellSize, cellSize * 2, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        });
+    }
+
+
     gridContainer.appendChild(canvas);
+}
+
+function renderGridWithPathfinding(grid, step) {
+    const canvas = gridContainer.querySelector('canvas');
+    if (!canvas) {
+        renderGrid(grid);
+        return;
+    }
+    const ctx = canvas.getContext('2d');
+
+    // Clear the canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Render the base grid
+    renderGrid(grid);
+
+    // Render open set
+    ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+    step.open_set.forEach(([x, y, floor]) => {
+        if (floor === currentFloor) {
+            ctx.fillRect(y * cellSize, x * cellSize, cellSize, cellSize);
+        }
+    });
+
+    // Render closed set
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+    step.closed_set.forEach(([x, y, floor]) => {
+        if (floor === currentFloor) {
+            ctx.fillRect(y * cellSize, x * cellSize, cellSize, cellSize);
+        }
+    });
+
+    // Render current path
+    ctx.fillStyle = 'rgba(0, 0, 255, 0.5)';
+    step.current_path.forEach(([x, y, floor]) => {
+        if (floor === currentFloor) {
+            ctx.fillRect(y * cellSize, x * cellSize, cellSize, cellSize);
+        }
+    });
 }
 
 function getCellColor(cellType) {
@@ -139,9 +222,24 @@ function getCellColor(cellType) {
 }
 
 function handleMouseDown(e) {
-    isMouseDown = true;
-    const { row, col } = getCellCoordinates(e);
-    startPainting(row, col);
+    if (e.button === 2) { // Right click
+        e.preventDefault();
+        const { row, col } = getCellCoordinates(e);
+        removeStartOrGoal(row, col);
+    } else {
+        isMouseDown = true;
+        const { row, col } = getCellCoordinates(e);
+        startPainting(row, col);
+    }
+}
+
+function removeStartOrGoal(row, col) {
+    if (start && start.row === row && start.col === col && start.floor === currentFloor) {
+        start = null;
+    } else {
+        goals = goals.filter(goal => !(goal.row === row && goal.col === col && goal.floor === currentFloor));
+    }
+    renderGrid(bufferedGridData.grids[currentFloor]);
 }
 
 function handleMouseMove(e) {
@@ -432,29 +530,53 @@ async function findPath() {
                 floors: bufferedGridData.floors,
                 bbox: bufferedGridData.bbox,
                 start: start,
-                goals: goals
+                goals: goals,
+                allow_diagonal: allowDiagonal
             })
         });
         const data = await response.json();
-        displayPathResult(data.path);
-        highlightPath(data.path);
+        if (response.ok) {
+            pathData = data.path;
+            displayPathResult(data.path_length);
+            renderGrid(bufferedGridData.grids[currentFloor]);
+        } else {
+            showError(`Pathfinding error: ${data.error}`);
+        }
     } catch (error) {
         console.error('Error:', error);
-        showError('An error occurred while finding the path.');
+        showError(`An error occurred while finding the path: ${error.message}`);
     }
 }
 
-function displayPathResult(path) {
-    document.getElementById('result').innerHTML = `<pre>${JSON.stringify(path, null, 2)}</pre>`;
+function displayPathResult(pathLength) {
+    document.getElementById('result').innerHTML = `Path length: ${pathLength.toFixed(2)} meters`;
 }
 
 function highlightPath(path) {
+    renderGrid(bufferedGridData.grids[currentFloor]);
     const canvas = gridContainer.querySelector('canvas');
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
     path.forEach(point => {
         if (point[2] === currentFloor) {
             ctx.fillRect(point[1] * cellSize, point[0] * cellSize, cellSize, cellSize);
+        }
+    });
+
+    // Highlight start and goals
+    ctx.fillStyle = 'green';
+    if (start.floor === currentFloor) {
+        ctx.beginPath();
+        ctx.arc((start.col + 0.5) * cellSize, (start.row + 0.5) * cellSize, cellSize / 2, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    ctx.fillStyle = 'red';
+    goals.forEach(goal => {
+        if (goal.floor === currentFloor) {
+            ctx.beginPath();
+            ctx.arc((goal.col + 0.5) * cellSize, (goal.row + 0.5) * cellSize, cellSize / 2, 0, 2 * Math.PI);
+            ctx.fill();
         }
     });
 }
@@ -595,6 +717,8 @@ async function batchUpdateCells(updates) {
 function handleProcessedData(data) {
     originalGridData = data;
     bufferedGridData = {...data};
+    originalGridData.grid_size *= originalGridData.unit_size;
+    bufferedGridData.grid_size *= bufferedGridData.unit_size;
     initializeGrid();
     showGridEditor();
 }
@@ -647,8 +771,8 @@ function hideProgress() {
 }
 
 function showError(message) {
-    // You can implement a more sophisticated error display here
-    alert(message);
+    console.error(message);
+    alert(message);  // You can replace this with a more sophisticated error display method
 }
 
 // Initialize the application
