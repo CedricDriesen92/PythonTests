@@ -69,8 +69,96 @@ class Pathfinder:
                         node2 = (pos[0], pos[1], floors[j])
                         if node1 in G and node2 in G:
                             G.add_edge(node1, node2, weight=self._get_edge_weight('stair'))
+        
+    def _calculate_path_lengths(self, path: List[Tuple[int, int, int]]) -> Dict[str, float]:
+        total_length = 0
+        floor_lengths = defaultdict(float)
+        stairway_distance = 0
+        current_floor = path[0][2]
+        found_stair = False
 
-    def find_path(self, start: Dict[str, int], goals: List[Dict[str, int]]) -> Tuple[List[Tuple[int, int, int]], List[Dict[str, Any]]]:
+        for i in range(len(path) - 1):
+            current_node = path[i]
+            next_node = path[i + 1]
+            edge_length = self.graph[current_node][next_node]['weight'] * self.grid_size
+
+            if current_node[2] == next_node[2]:  # Same floor
+                floor_lengths[f"floor_{current_node[2]}"] += edge_length
+                if not found_stair:
+                    stairway_distance += edge_length
+            else:  # Floor change
+                found_stair = True
+
+            if self.grids[current_node[2]][current_node[0]][current_node[1]] == 'stair':
+                found_stair = True
+
+            total_length += edge_length
+        
+        print(total_length)
+
+        return {
+            "total_length": total_length,
+            "floor_lengths": dict(floor_lengths),
+            "stairway_distance": stairway_distance
+        }
+
+    def detect_exits(self) -> List[Tuple[int, int, int]]:
+        exits = set()
+        for floor_index, floor in enumerate(self.grids):
+            rows, cols = len(floor), len(floor[0])
+            for i in range(rows):
+                for j in range(cols):
+                    if floor[i][j] == 'door':
+                        if self._is_exit(floor, i, j):
+                            exits.add((i, j, floor_index))
+
+        return list(self._filter_exits(exits))
+
+    def _is_exit(self, floor: List[List[str]], x: int, y: int) -> bool:
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        rows, cols = len(floor), len(floor[0])
+
+        for dx, dy in directions:
+            nx, ny = x + dx, y + dy
+            while 0 <= nx < rows and 0 <= ny < cols:
+                if floor[nx][ny] in ['wall', 'door']:
+                    break
+                if nx == 0 or nx == rows - 1 or ny == 0 or ny == cols - 1:
+                    return True
+                nx, ny = nx + dx, ny + dy
+
+        return False
+
+    def _filter_exits(self, exits: set) -> set:
+        filtered = set()
+        for exit in exits:
+            if not any(self._are_connected_by_doors(exit, existing) for existing in filtered):
+                filtered.add(exit)
+        return filtered
+
+    def _are_connected_by_doors(self, pos1: Tuple[int, int, int], pos2: Tuple[int, int, int]) -> bool:
+        if pos1[2] != pos2[2]:  # Different floors
+            return False
+
+        floor = self.grids[pos1[2]]
+        visited = set()
+        queue = [(pos1[0], pos1[1])]
+
+        while queue:
+            x, y = queue.pop(0)
+            if (x, y) == (pos2[0], pos2[1]):
+                return True
+
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < len(floor) and 0 <= ny < len(floor[0]) and (nx, ny) not in visited and floor[nx][ny] == 'door':
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+
+        return False
+
+
+    def find_path(self, start: Dict[str, int], goals: List[Dict[str, int]]) -> Tuple[List[Tuple[int, int, int]], Dict[str, float]]:
         start_node = (start['row'], start['col'], start['floor'])
         goal_nodes = [(goal['row'], goal['col'], goal['floor']) for goal in goals]
         
@@ -98,17 +186,24 @@ class Pathfinder:
                 continue
 
         if not path:
-            return [], []
+            return [], {}
 
-        return path, [{'current_path': path, 'open_set': [], 'closed_set': []}]
+        path_lengths = self._calculate_path_lengths(path)
+        return path, path_lengths
 
 def find_path(grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float], 
-              start: Dict[str, int], goals: List[Dict[str, int]], allow_diagonal: bool = False, minimize_cost: bool = True) -> Tuple[List[Tuple[int, int, int]], List[Dict[str, Any]]]:
+              start: Dict[str, int], goals: List[Dict[str, int]], allow_diagonal: bool = False, minimize_cost: bool = True) -> Tuple[List[Tuple[int, int, int]], Dict[str, float]]:
     try:
         pathfinder = Pathfinder(grids, grid_size, floors, bbox, allow_diagonal, minimize_cost)
-        path, steps = pathfinder.find_path(start, goals)
-        path_length = sum(pathfinder.graph[path[i]][path[i+1]]['weight'] for i in range(len(path)-1)) * grid_size
-        return path, path_length
+        return pathfinder.find_path(start, goals)
     except Exception as e:
         print(f"Error in find_path: {str(e)}")
+        raise
+
+def detect_exits(grids: List[List[List[str]]], grid_size: float, floors: List[Dict[str, float]], bbox: Dict[str, float]) -> List[Tuple[int, int, int]]:
+    try:
+        pathfinder = Pathfinder(grids, grid_size, floors, bbox)
+        return pathfinder.detect_exits()
+    except Exception as e:
+        print(f"Error in detect_exits: {str(e)}")
         raise

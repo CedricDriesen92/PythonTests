@@ -36,6 +36,7 @@ const wallBufferSlider = document.getElementById('wall-buffer');
 const allowDiagonalCheckbox = document.getElementById('allow-diagonal');
 const minimizeCostCheckbox = document.getElementById('minimize-cost');
 const exportPathButton = document.getElementById('export-path');
+const detectExitsButton = document.getElementById('detect-exits');
 
 // Event listeners
 fileUploadForm.addEventListener('submit', uploadFile);
@@ -55,6 +56,7 @@ minimizeCostCheckbox.addEventListener('change', (e) => {
 });
 exportPathButton.addEventListener('click', exportPath);
 gridContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+detectExitsButton.addEventListener('click', detectExits);
 
 document.getElementById('draw-wall').addEventListener('click', () => setCurrentType('wall'));
 document.getElementById('draw-door').addEventListener('click', () => setCurrentType('door'));
@@ -91,6 +93,7 @@ async function uploadFile(event) {
         }
 
         const result = await response.json();
+        console.log('Received data from server:', result);
         handleProcessedData(result);
     } catch (error) {
         console.error('Error:', error);
@@ -101,26 +104,51 @@ async function uploadFile(event) {
 }
 
 function handleProcessedData(data) {
+    console.log('Handling processed data:', data);
     originalGridData = data;
     bufferedGridData = {...data};
-    originalGridData.grid_size *= originalGridData.unit_size;
-    bufferedGridData.grid_size *= bufferedGridData.unit_size;
+    
+    // Ensure grid_size is properly set
+    if (typeof originalGridData.grid_size === 'number') {
+        originalGridData.grid_size *= originalGridData.unit_size || 1;
+        bufferedGridData.grid_size *= bufferedGridData.unit_size || 1;
+        console.log('Adjusted grid size:', bufferedGridData.grid_size);
+    } else {
+        console.error('Invalid grid_size in loaded data:', originalGridData.grid_size);
+        showError('Invalid grid size in loaded data');
+        return;
+    }
+
+    // Ensure grids are properly formatted
+    if (!Array.isArray(originalGridData.grids) || originalGridData.grids.length === 0) {
+        console.error('Invalid grids data in loaded file:', originalGridData.grids);
+        showError('Invalid grids data in loaded file');
+        return;
+    }
+
+    console.log('Grid data seems valid, initializing grid...');
     initializeGrid();
     showGridEditor();
 }
 
 function initializeGrid() {
+    console.log('Initializing grid...');
     const containerWidth = gridContainer.clientWidth;
     const containerHeight = gridContainer.clientHeight;
+    console.log('Container dimensions:', containerWidth, containerHeight);
+
     const gridWidth = bufferedGridData.grids[0][0].length;
     const gridHeight = bufferedGridData.grids[0].length;
+    console.log('Grid dimensions:', gridWidth, gridHeight);
 
     const horizontalZoom = containerWidth / gridWidth;
     const verticalZoom = containerHeight / gridHeight;
     minZoom = Math.min(horizontalZoom, verticalZoom);
+    console.log('Calculated zoom levels:', horizontalZoom, verticalZoom, minZoom);
 
-    zoomLevel = 2000//Math.max(100, Math.min(25000, Math.round(minZoom * 100)));
+    zoomLevel = Math.max(100, Math.min(25000, Math.round(minZoom * 100)));
     cellSize = (zoomLevel / 100) * bufferedGridData.grid_size;
+    console.log('Set zoom level and cell size:', zoomLevel, cellSize);
 
     zoomSlider.value = zoomLevel;
     updateZoomLevel();
@@ -176,6 +204,7 @@ function renderGrid(grid) {
 
 
     gridContainer.appendChild(canvas);
+    console.log('Grid rendered and appended to container');
 }
 
 function renderGridWithPathfinding(grid, step) {
@@ -546,7 +575,7 @@ async function findPath() {
         const data = await response.json();
         if (response.ok) {
             pathData = data.path;
-            displayPathResult(data.path_length);
+            displayPathResult(data.path_lengths);
             renderGrid(bufferedGridData.grids[currentFloor]);
         } else {
             showError(`Pathfinding error: ${data.error}`);
@@ -557,8 +586,20 @@ async function findPath() {
     }
 }
 
-function displayPathResult(pathLength) {
-    document.getElementById('result').innerHTML = `Path length: ${pathLength.toFixed(2)} meters`;
+function displayPathResult(pathLengths) {
+    let resultHTML = `<h3>Path Lengths:</h3>
+                      <p>Total length: ${pathLengths.total_length.toFixed(2)} meters</p>
+                      <p>Distance to stairway: ${pathLengths.stairway_distance.toFixed(2)} meters</p>
+                      <h4>Floor-wise lengths:</h4>
+                      <ul>`;
+    
+    for (const [floor, length] of Object.entries(pathLengths.floor_lengths)) {
+        resultHTML += `<li>Floor ${parseInt(floor.split('_')[1]) + 1}: ${length.toFixed(2)} meters</li>`;
+    }
+    
+    resultHTML += '</ul>';
+    
+    document.getElementById('result').innerHTML = resultHTML;
 }
 
 function highlightPath(path) {
@@ -695,6 +736,34 @@ async function batchUpdateCells(updates) {
     }
 }
 
+async function detectExits() {
+    try {
+        const response = await fetch('/api/detect-exits', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                grids: bufferedGridData.grids,
+                grid_size: bufferedGridData.grid_size,
+                floors: bufferedGridData.floors,
+                bbox: bufferedGridData.bbox
+            })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            goals = data.exits.map(exit => ({ row: exit[0], col: exit[1], floor: exit[2] }));
+            renderGrid(bufferedGridData.grids[currentFloor]);
+            showMessage('Exits detected and added as goals.');
+        } else {
+            showError(`Exit detection error: ${data.error}`);
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showError(`An error occurred while detecting exits: ${error.message}`);
+    }
+}
+
 function handleProcessedData(data) {
     originalGridData = data;
     bufferedGridData = {...data};
@@ -756,6 +825,11 @@ function showError(message) {
     alert(message);  // You can replace this with a more sophisticated error display method
 }
 
+function showMessage(message) {
+    console.log(message);
+    alert(message);  // You can replace this with a more sophisticated message display method
+}
+
 function downloadGrid() {
     if (!originalGridData) {
         showError('No grid data available. Please upload or create a grid first.');
@@ -814,7 +888,15 @@ function exportPath() {
         // Draw floor label
         ctx.fillStyle = 'black';
         ctx.font = '16px Arial';
-        ctx.fillText(`Floor ${parseInt(floor) + 1}`, padding, yOffset + 20);
+        const pathLengths = JSON.parse(document.getElementById('result').getAttribute('data-path-lengths'));
+        let yPosition = canvas.height - padding;
+        ctx.fillText(`Total path length: ${pathLengths.total_length.toFixed(2)} meters`, padding, yPosition);
+        yPosition -= 20;
+        ctx.fillText(`Distance to stairway: ${pathLengths.stairway_distance.toFixed(2)} meters`, padding, yPosition);
+        for (const [floor, length] of Object.entries(pathLengths.floor_lengths)) {
+            yPosition -= 20;
+            ctx.fillText(`Floor ${parseInt(floor.split('_')[1]) + 1} length: ${length.toFixed(2)} meters`, padding, yPosition);
+        }    
 
         // Draw grid
         bufferedGridData.grids[floor].forEach((row, i) => {
